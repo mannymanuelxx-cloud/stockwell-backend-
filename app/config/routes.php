@@ -51,6 +51,10 @@ $router->get('/', function () {
 });
 
 // JSON API used by the separate frontend.
+$router->options('/api/{resource}/{first?}/{second?}/{third?}', function () {
+    lava_instance()->call->library('api');
+});
+
 $router->get('/api/products', 'ApiController::index');
 $router->post('/api/products', 'ApiController::store');
 $router->get('/api/stock-adjustments', 'ApiController::stockAdjustments');
