@@ -71,6 +71,7 @@ $database['main'] = array(
     'username'	=> $read_database_environment('DB_USERNAME'),
     'password'	=> $read_database_environment('DB_PASSWORD'),
     'database'	=> $read_database_environment('DB_NAME'),
+    'ssl_ca'	=> $read_database_environment('DB_SSL_CA'),
     'charset'	=> 'utf8mb4',
     'dbprefix'	=> '',
     // Optional for SQLite

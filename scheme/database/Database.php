@@ -238,6 +238,10 @@ class Database {
             ? $database_config['password']
             : '';
 
+        $ssl_ca = isset($database_config['ssl_ca']) && is_string($database_config['ssl_ca'])
+            ? trim($database_config['ssl_ca'])
+            : '';
+
         $path = isset($database_config['path']) && !empty($database_config['path'])
             ? $database_config['path']
             : null;
@@ -269,6 +273,19 @@ class Database {
         );
 
         try {
+            if ($driver === 'mysql' && $ssl_ca !== '') {
+                if (!is_file($ssl_ca) || !is_readable($ssl_ca)) {
+                    throw new PDOException('The configured MySQL SSL CA file is missing or unreadable.');
+                }
+
+                if (!defined('PDO::MYSQL_ATTR_SSL_CA') || !defined('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT')) {
+                    throw new PDOException('PDO MySQL SSL support is unavailable.');
+                }
+
+                $options[constant('PDO::MYSQL_ATTR_SSL_CA')] = $ssl_ca;
+                $options[constant('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT')] = true;
+            }
+
             $this->db = new PDO($dsn, $username, $password, $options);
             $this->driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
         } catch (Exception $e) {
