@@ -190,7 +190,7 @@ class Api
             header($name . ': ' . $value);
         }
 
-        header('Access-Control-Allow-Headers: Authorization, Content-Type, X-Requested-With, X-RateLimit-*');
+        header('Access-Control-Allow-Headers: Authorization, Content-Type, X-CSRF-Token, X-Requested-With, X-RateLimit-*');
         header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS');
         header('Access-Control-Max-Age: 3600');
         header('Content-Type: application/json; charset=UTF-8');
