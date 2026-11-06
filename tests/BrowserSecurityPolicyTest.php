@@ -64,7 +64,7 @@ $tests = [
             []
         ));
     },
-    'public mutations validate browser origins while preserving allowed non-cookie API integrations' => function () use ($sameOriginServer) {
+    'public mutations accept explicitly trusted origins and reject untrusted cookie requests' => function () use ($sameOriginServer) {
         assertSame(null, BrowserSecurityPolicy::validateBrowserOriginIfPresent([
             'REQUEST_METHOD' => 'POST'
         ]));
@@ -80,9 +80,15 @@ $tests = [
         ));
         $previousCookie = $_COOKIE[session_name()] ?? null;
         $_COOKIE[session_name()] = 'browser-session';
+        $server['HTTP_ORIGIN'] = 'https://store.example';
+        assertSame(null, BrowserSecurityPolicy::validateBrowserOriginIfPresent(
+            $server,
+            ['https://store.example']
+        ));
+        $server['HTTP_ORIGIN'] = 'https://attacker.example';
         assertSame(
             'The request origin could not be verified.',
-            BrowserSecurityPolicy::validateBrowserOriginIfPresent($server, ['https://attacker.example'])
+            BrowserSecurityPolicy::validateBrowserOriginIfPresent($server, ['https://store.example'])
         );
         if ($previousCookie === null) {
             unset($_COOKIE[session_name()]);

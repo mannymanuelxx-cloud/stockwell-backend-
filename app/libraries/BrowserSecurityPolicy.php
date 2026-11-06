@@ -82,10 +82,6 @@ class BrowserSecurityPolicy
         if (!$hasOrigin && !$hasReferer) return null;
         if (self::requestOriginMatches($server)) return null;
 
-        if (isset($_COOKIE[session_name()])) {
-            return 'The request origin could not be verified.';
-        }
-
         if ($allowedApiOrigins === null && function_exists('config_item')) {
             $allowedApiOrigins = config_item('allow_origin');
         }
@@ -99,6 +95,10 @@ class BrowserSecurityPolicy
                 && hash_equals($requestOrigin, (string) self::normalizeOrigin($allowedOrigin, false))) {
                 return null;
             }
+        }
+
+        if (isset($_COOKIE[session_name()])) {
+            return 'The request origin could not be verified.';
         }
 
         return 'The request origin could not be verified.';
