@@ -8,6 +8,9 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
  */
 class ProductModel extends Model
 {
+    // Increment when the product schema changes so migrations run once again.
+    private const PRODUCT_SCHEMA_VERSION = 1;
+
     /**
      * Table associated with the model
      *
@@ -42,6 +45,36 @@ class ProductModel extends Model
     ];
 
     public function ensureTable()
+    {
+        if ($this->productSchemaIsCurrent()) return;
+
+        $lock = $this->db->raw("SELECT GET_LOCK('manuel_friends_product_schema', 10) AS acquired")->fetch();
+        if (empty($lock['acquired'])) {
+            throw new RuntimeException('Could not acquire the database product schema initialization lock.');
+        }
+
+        try {
+            if ($this->productSchemaIsCurrent()) return;
+
+            $this->createOrUpdateProductSchema();
+            $this->db->raw("CREATE TABLE IF NOT EXISTS product_schema_version (
+                version INT UNSIGNED NOT NULL PRIMARY KEY,
+                installed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            $this->db->raw('INSERT IGNORE INTO product_schema_version (version) VALUES (' . self::PRODUCT_SCHEMA_VERSION . ')');
+        } finally {
+            $this->db->raw("SELECT RELEASE_LOCK('manuel_friends_product_schema')");
+        }
+    }
+
+    private function productSchemaIsCurrent()
+    {
+        if (!$this->db->raw("SHOW TABLES LIKE 'product_schema_version'")->fetch()) return false;
+        $version = $this->db->raw('SELECT MAX(version) AS version FROM product_schema_version')->fetch();
+        return (int) ($version['version'] ?? 0) >= self::PRODUCT_SCHEMA_VERSION;
+    }
+
+    private function createOrUpdateProductSchema()
     {
         $this->db->raw(
             'CREATE TABLE IF NOT EXISTS products (

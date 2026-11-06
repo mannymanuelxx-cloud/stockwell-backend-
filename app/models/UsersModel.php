@@ -10,6 +10,9 @@ require_once __DIR__ . '/../libraries/SessionAuthenticationPolicy.php';
  */
 class UsersModel extends Model
 {
+    // Increment when the auth schema changes so migrations run once again.
+    private const AUTH_SCHEMA_VERSION = 1;
+
     /**
      * Table associated with the model
      *
@@ -39,6 +42,29 @@ class UsersModel extends Model
     ];
 
     public function ensureAuthSchema()
+    {
+        if ($this->authSchemaIsCurrent()) return;
+
+        $lock = $this->db->raw("SELECT GET_LOCK('manuel_friends_auth_schema', 10) AS acquired")->fetch();
+        if (empty($lock['acquired'])) {
+            throw new RuntimeException('Could not acquire the database auth schema initialization lock.');
+        }
+
+        try {
+            if ($this->authSchemaIsCurrent()) return;
+
+            $this->migrateAuthSchema();
+            $this->db->raw("CREATE TABLE IF NOT EXISTS auth_schema_version (
+                version INT UNSIGNED NOT NULL PRIMARY KEY,
+                installed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            $this->db->raw('INSERT IGNORE INTO auth_schema_version (version) VALUES (' . self::AUTH_SCHEMA_VERSION . ')');
+        } finally {
+            $this->db->raw("SELECT RELEASE_LOCK('manuel_friends_auth_schema')");
+        }
+    }
+
+    private function migrateAuthSchema()
     {
         $this->db->raw("CREATE TABLE IF NOT EXISTS password_reset_tokens (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -89,6 +115,13 @@ class UsersModel extends Model
             }
             $this->db->raw('CREATE UNIQUE INDEX users_email_unique ON users (email)');
         }
+    }
+
+    private function authSchemaIsCurrent()
+    {
+        if (!$this->db->raw("SHOW TABLES LIKE 'auth_schema_version'")->fetch()) return false;
+        $version = $this->db->raw('SELECT MAX(version) AS version FROM auth_schema_version')->fetch();
+        return (int) ($version['version'] ?? 0) >= self::AUTH_SCHEMA_VERSION;
     }
 
     public function permissionsForRole($role)

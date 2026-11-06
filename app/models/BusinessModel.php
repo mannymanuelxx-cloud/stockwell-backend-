@@ -6,6 +6,9 @@ require_once __DIR__ . '/../libraries/PaymentPolicy.php';
 
 class BusinessModel extends Model
 {
+    // Increment when the business schema changes so migrations run once again.
+    private const SCHEMA_VERSION = 2;
+
     private function ensureSalesSchema()
     {
         if ($this->db->raw("SHOW TABLES LIKE 'sales'")->fetch() && !$this->db->raw("SHOW COLUMNS FROM sales LIKE 'status'")->fetch()) {
@@ -29,12 +32,7 @@ class BusinessModel extends Model
 
     public function ensureSchema()
     {
-        if ($this->db->raw("SHOW TABLES LIKE 'business_schema_version'")->fetch()) {
-            $this->ensureSalesSchema();
-            $this->ensureShopSchema();
-            $this->ensureActivitySchema();
-            return;
-        }
+        if ($this->businessSchemaIsCurrent()) return;
 
         $lock = $this->db->raw("SELECT GET_LOCK('manuel_friends_business_schema', 10) AS acquired")->fetch();
         if (empty($lock['acquired'])) {
@@ -42,9 +40,13 @@ class BusinessModel extends Model
         }
 
         try {
+            if ($this->businessSchemaIsCurrent()) return;
+
             if ($this->db->raw("SHOW TABLES LIKE 'business_schema_version'")->fetch()) {
+                $this->ensureSalesSchema();
                 $this->ensureShopSchema();
                 $this->ensureActivitySchema();
+                $this->db->raw('INSERT IGNORE INTO business_schema_version (version) VALUES (' . self::SCHEMA_VERSION . ')');
                 return;
             }
 
@@ -144,9 +146,17 @@ class BusinessModel extends Model
             $this->db->raw('INSERT INTO business_schema_version (version) VALUES (1)');
             $this->ensureShopSchema();
             $this->ensureActivitySchema();
+            $this->db->raw('INSERT IGNORE INTO business_schema_version (version) VALUES (' . self::SCHEMA_VERSION . ')');
         } finally {
             $this->db->raw("SELECT RELEASE_LOCK('manuel_friends_business_schema')");
         }
+    }
+
+    private function businessSchemaIsCurrent()
+    {
+        if (!$this->db->raw("SHOW TABLES LIKE 'business_schema_version'")->fetch()) return false;
+        $version = $this->db->raw('SELECT MAX(version) AS version FROM business_schema_version')->fetch();
+        return (int) ($version['version'] ?? 0) >= self::SCHEMA_VERSION;
     }
 
     private function ensureShopSchema()
