@@ -57,6 +57,28 @@ $tests = [
             BrowserSecurityPolicy::validateStateChangingRequest(true, $server, ['_csrf_token' => 'expected'])
         );
     },
+    'trusted storefront mutations require a matching CSRF token' => function () {
+        $server = [
+            'REQUEST_METHOD' => 'POST',
+            'HTTP_HOST' => 'api.example',
+            'HTTPS' => 'on',
+            'HTTP_ORIGIN' => 'https://store.example',
+            'HTTP_X_CSRF_TOKEN' => 'session-token'
+        ];
+        assertSame(null, BrowserSecurityPolicy::validateStateChangingRequest(
+            true,
+            $server,
+            ['_csrf_token' => 'session-token'],
+            ['https://store.example']
+        ));
+        $server['HTTP_ORIGIN'] = 'https://attacker.example';
+        assertSame('The request origin could not be verified.', BrowserSecurityPolicy::validateStateChangingRequest(
+            true,
+            $server,
+            ['_csrf_token' => 'session-token'],
+            ['https://store.example']
+        ));
+    },
     'safe requests do not require an Origin or CSRF token' => function () {
         assertSame(null, BrowserSecurityPolicy::validateStateChangingRequest(
             true,
@@ -103,6 +125,18 @@ $tests = [
         assertSame(true, $params['secure']);
         assertSame(true, $params['httponly']);
         assertSame('Strict', $params['samesite']);
+        session_set_cookie_params($previous);
+    },
+    'cross-origin HTTPS storefront sessions use Secure SameSite=None cookies' => function () {
+        $previous = session_get_cookie_params();
+        BrowserSecurityPolicy::configureSessionCookie([
+            'HTTP_HOST' => 'api.example',
+            'HTTP_X_FORWARDED_PROTO' => 'https'
+        ], ['https://store.example']);
+        $params = session_get_cookie_params();
+        assertSame(true, $params['secure']);
+        assertSame(true, $params['httponly']);
+        assertSame('None', $params['samesite']);
         session_set_cookie_params($previous);
     },
     'HTTP session cookies remain HttpOnly and SameSite configured' => function () {

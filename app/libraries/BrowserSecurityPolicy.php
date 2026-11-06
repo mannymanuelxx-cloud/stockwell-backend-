@@ -11,7 +11,7 @@ class BrowserSecurityPolicy
         session_start();
     }
 
-    public static function configureSessionCookie(array $server = null)
+    public static function configureSessionCookie(array $server = null, $allowedApiOrigins = null)
     {
         if (session_status() === PHP_SESSION_ACTIVE) return;
 
@@ -21,6 +21,9 @@ class BrowserSecurityPolicy
         if (!in_array($sameSite, ['Lax', 'Strict', 'None'], true)) $sameSite = 'Lax';
         $secure = self::isHttps($server)
             || (function_exists('config_item') && !empty(config_item('cookie_secure')));
+        if ($secure && self::hasCrossOriginApiOrigin($server, $allowedApiOrigins)) {
+            $sameSite = 'None';
+        }
 
         session_set_cookie_params([
             'lifetime' => $params['lifetime'],
@@ -52,11 +55,17 @@ class BrowserSecurityPolicy
         return $_SESSION['_csrf_token'];
     }
 
-    public static function validateStateChangingRequest($requireToken, array $server = null, array $session = null)
+    public static function validateStateChangingRequest(
+        $requireToken,
+        array $server = null,
+        array $session = null,
+        $allowedApiOrigins = null
+    )
     {
         $server = $server ?? $_SERVER;
         if (!self::isUnsafeMethod($server['REQUEST_METHOD'] ?? 'GET')) return null;
-        if (!self::requestOriginMatches($server)) {
+        if (!self::requestOriginMatches($server)
+            && !self::matchesTrustedApiOrigin($server, $allowedApiOrigins)) {
             return 'The request origin could not be verified.';
         }
 
@@ -82,26 +91,57 @@ class BrowserSecurityPolicy
         if (!$hasOrigin && !$hasReferer) return null;
         if (self::requestOriginMatches($server)) return null;
 
+        if (self::matchesTrustedApiOrigin($server, $allowedApiOrigins)) return null;
+
+        return 'The request origin could not be verified.';
+    }
+
+    private static function matchesTrustedApiOrigin(array $server, $allowedApiOrigins = null)
+    {
         if ($allowedApiOrigins === null && function_exists('config_item')) {
             $allowedApiOrigins = config_item('allow_origin');
         }
         if (!is_array($allowedApiOrigins)) $allowedApiOrigins = [$allowedApiOrigins];
-        $requestOrigin = isset($server['HTTP_ORIGIN'])
-            ? self::normalizeOrigin($server['HTTP_ORIGIN'], false)
-            : self::normalizeOrigin($server['HTTP_REFERER'], true);
+
+        if (isset($server['HTTP_ORIGIN']) && $server['HTTP_ORIGIN'] !== '') {
+            $requestOrigin = self::normalizeOrigin($server['HTTP_ORIGIN'], false);
+        } elseif (isset($server['HTTP_REFERER']) && $server['HTTP_REFERER'] !== '') {
+            $requestOrigin = self::normalizeOrigin($server['HTTP_REFERER'], true);
+        } else {
+            return false;
+        }
+        if ($requestOrigin === null) return false;
+
         foreach ($allowedApiOrigins as $allowedOrigin) {
             if (!is_string($allowedOrigin) || $allowedOrigin === '' || $allowedOrigin === '*') continue;
-            if ($requestOrigin !== null
-                && hash_equals($requestOrigin, (string) self::normalizeOrigin($allowedOrigin, false))) {
-                return null;
+            $normalizedAllowedOrigin = self::normalizeOrigin($allowedOrigin, false);
+            if ($normalizedAllowedOrigin !== null && hash_equals($requestOrigin, $normalizedAllowedOrigin)) {
+                return true;
             }
         }
+        return false;
+    }
 
-        if (isset($_COOKIE[session_name()])) {
-            return 'The request origin could not be verified.';
+    private static function hasCrossOriginApiOrigin(array $server, $allowedApiOrigins = null)
+    {
+        if ($allowedApiOrigins === null && function_exists('config_item')) {
+            $allowedApiOrigins = config_item('allow_origin');
         }
+        if (!is_array($allowedApiOrigins)) $allowedApiOrigins = [$allowedApiOrigins];
 
-        return 'The request origin could not be verified.';
+        $host = trim((string) ($server['HTTP_HOST'] ?? ''));
+        if ($host === '' || preg_match('/[\s\/\\\\]/', $host)) return false;
+        $apiOrigin = self::normalizeOrigin(self::requestScheme($server) . '://' . $host, false);
+        if ($apiOrigin === null) return false;
+
+        foreach ($allowedApiOrigins as $allowedOrigin) {
+            if (!is_string($allowedOrigin) || $allowedOrigin === '' || $allowedOrigin === '*') continue;
+            $normalizedAllowedOrigin = self::normalizeOrigin($allowedOrigin, false);
+            if ($normalizedAllowedOrigin !== null && !hash_equals($apiOrigin, $normalizedAllowedOrigin)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static function isUnsafeMethod($method)
