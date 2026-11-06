@@ -353,7 +353,11 @@ class ShopController extends Controller
             $this->BusinessModel->logActivity((int) $_SESSION['user_id'], $_SESSION['username'] ?? 'Customer', 'placed', 'order', $orderId);
             $response = ['data' => ['id' => $orderId]];
             $order = $this->BusinessModel->orderNotificationInfo($orderId);
-            if ($order && filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+            if (!$order) {
+                $response['notification_warning'] = 'Your order was placed, but its confirmation email could not be sent because the customer email could not be found.';
+            } elseif (!filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+                $response['notification_warning'] = 'Your order was placed, but the customer has no valid email address on file.';
+            } else {
                 try {
                     require_once ROOT_DIR . 'app/libraries/StoreMailer.php';
                     (new StoreMailer())->sendOrderUpdate($order, 'order placed');
@@ -400,7 +404,10 @@ class ShopController extends Controller
     private function sendOrderNotification($orderId, $event)
     {
         $order = $this->BusinessModel->orderNotificationInfo($orderId);
-        if (!$order || !filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL)) return null;
+        if (!$order) return 'Your order was updated, but its customer email could not be found.';
+        if (!filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+            return 'Your order was updated, but the customer has no valid email address on file.';
+        }
         try {
             require_once ROOT_DIR . 'app/libraries/StoreMailer.php';
             (new StoreMailer())->sendOrderUpdate($order, $event);

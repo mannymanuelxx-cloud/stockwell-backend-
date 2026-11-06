@@ -532,7 +532,10 @@ class BusinessController extends Controller
     private function sendOrderNotification($orderId, $event)
     {
         $order = $this->BusinessModel->orderNotificationInfo($orderId);
-        if (!$order || !filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL)) return null;
+        if (!$order) return 'The order was saved, but its customer email could not be found.';
+        if (!filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+            return 'The order was saved, but the customer has no valid email address on file.';
+        }
         try {
             require_once ROOT_DIR . 'app/libraries/StoreMailer.php';
             (new StoreMailer())->sendOrderUpdate($order, $event);

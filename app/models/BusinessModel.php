@@ -7,7 +7,7 @@ require_once __DIR__ . '/../libraries/PaymentPolicy.php';
 class BusinessModel extends Model
 {
     // Increment when the business schema changes so migrations run once again.
-    private const SCHEMA_VERSION = 2;
+    private const SCHEMA_VERSION = 3;
 
     private function ensureSalesSchema()
     {
@@ -203,6 +203,11 @@ class BusinessModel extends Model
                 $this->db->raw('ALTER TABLE customer_orders ADD COLUMN delivered_at DATETIME NULL');
                 $this->db->raw("UPDATE customer_orders SET delivered_at = updated_at WHERE status IN ('delivered', 'completed')");
             }
+            if (!$this->db->raw("SHOW COLUMNS FROM customer_orders LIKE 'completed_at'")->fetch()) {
+                $this->db->raw('ALTER TABLE customer_orders ADD COLUMN completed_at DATETIME NULL');
+            }
+            $this->db->raw("UPDATE customer_orders SET completed_at = COALESCE(delivered_at, updated_at, created_at)
+                WHERE status = 'completed' AND completed_at IS NULL");
             if (!$this->db->raw("SHOW COLUMNS FROM customer_orders LIKE 'subtotal'")->fetch()) {
                 $this->db->raw('ALTER TABLE customer_orders ADD COLUMN subtotal DECIMAL(12,2) NOT NULL DEFAULT 0');
                 $this->db->raw('UPDATE customer_orders SET subtotal = total');
@@ -615,8 +620,10 @@ class BusinessModel extends Model
     {
         return $this->db->raw(
             'SELECT o.id, o.status, o.payment_status, o.amount_paid, o.total, o.delivery_address, o.delivery_name, o.delivery_phone,
-                o.courier, o.tracking_number, o.tracking_url, o.estimated_delivery_at, c.email, c.name
+                o.courier, o.tracking_number, o.tracking_url, o.estimated_delivery_at,
+                COALESCE(NULLIF(TRIM(c.email), \'\'), u.email) AS email, c.name
              FROM customer_orders o JOIN customers c ON c.id = o.customer_id
+             LEFT JOIN users u ON u.id = c.user_id
              WHERE o.id = ? LIMIT 1',
             [(int) $orderId]
         )->fetch();
@@ -626,10 +633,11 @@ class BusinessModel extends Model
     {
         return $this->db->raw(
             'SELECT r.id, r.order_id, r.reason, r.status, r.refund_amount, r.updated_at,
-                o.status AS order_status, c.name, c.email
+                o.status AS order_status, c.name, COALESCE(NULLIF(TRIM(c.email), \'\'), u.email) AS email
              FROM order_return_requests r
              JOIN customer_orders o ON o.id = r.order_id
              JOIN customers c ON c.id = r.customer_id
+             LEFT JOIN users u ON u.id = c.user_id
              WHERE r.id = ? LIMIT 1',
             [(int) $returnId]
         )->fetch();
@@ -1608,6 +1616,8 @@ class BusinessModel extends Model
                 $this->db->raw("UPDATE {$table} SET status = ?, stock_reserved = 1 WHERE id = ?", [$newStatus, $id]);
             } elseif ($reservedOrder && $newStatus === 'cancelled') {
                 $this->db->raw("UPDATE {$table} SET status = ?, stock_reserved = 0 WHERE id = ?", [$newStatus, $id]);
+            } elseif ($kind === 'orders' && $newStatus === 'completed') {
+                $this->db->raw("UPDATE {$table} SET status = ?, completed_at = NOW() WHERE id = ?", [$newStatus, $id]);
             } elseif ($kind === 'orders' && $newStatus === 'delivered') {
                 $payment = PaymentPolicy::cashOnDeliveryPayment(
                     $document['payment_status'],
@@ -1694,7 +1704,12 @@ class BusinessModel extends Model
             FROM (
                 SELECT total, created_at FROM sales WHERE status = 'completed'
                 UNION ALL
-                SELECT total, created_at FROM customer_orders WHERE status IN ('completed','delivered')
+                SELECT total,
+                    CASE WHEN status = 'completed'
+                        THEN COALESCE(completed_at, delivered_at, created_at)
+                        ELSE COALESCE(delivered_at, created_at)
+                    END AS created_at
+                FROM customer_orders WHERE status IN ('completed','delivered')
             ) completed_sales
             WHERE DATE(created_at) BETWEEN ? AND ?", [$start, $end])->fetch();
         $purchaseSummary = $this->db->raw("SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total
@@ -1711,7 +1726,11 @@ class BusinessModel extends Model
                     SELECT si.product_id, si.quantity, si.line_total, s.created_at
                     FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.status = 'completed'
                     UNION ALL
-                    SELECT oi.product_id, oi.quantity, oi.line_total, o.created_at
+                    SELECT oi.product_id, oi.quantity, oi.line_total,
+                        CASE WHEN o.status = 'completed'
+                            THEN COALESCE(o.completed_at, o.delivered_at, o.created_at)
+                            ELSE COALESCE(o.delivered_at, o.created_at)
+                        END AS created_at
                     FROM customer_order_items oi JOIN customer_orders o ON o.id = oi.order_id
                     WHERE o.status IN ('completed','delivered')
                 ) sold_lines
@@ -1731,7 +1750,10 @@ class BusinessModel extends Model
                 FROM sales s JOIN sale_items si ON si.sale_id = s.id
                 WHERE s.status = 'completed'
                 UNION ALL
-                SELECT o.created_at, 'Order', o.id, oi.product_name, -oi.quantity
+                SELECT CASE WHEN o.status = 'completed'
+                    THEN COALESCE(o.completed_at, o.delivered_at, o.created_at)
+                    ELSE COALESCE(o.delivered_at, o.created_at)
+                END, 'Order', o.id, oi.product_name, -oi.quantity
                 FROM customer_orders o JOIN customer_order_items oi ON oi.order_id = o.id
                 WHERE o.status IN ('completed','delivered')
                 UNION ALL
@@ -1746,7 +1768,11 @@ class BusinessModel extends Model
                 SELECT si.product_id, si.product_name, si.quantity, si.line_total, s.created_at
                 FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.status = 'completed'
                 UNION ALL
-                SELECT oi.product_id, oi.product_name, oi.quantity, oi.line_total, o.created_at
+                SELECT oi.product_id, oi.product_name, oi.quantity, oi.line_total,
+                    CASE WHEN o.status = 'completed'
+                        THEN COALESCE(o.completed_at, o.delivered_at, o.created_at)
+                        ELSE COALESCE(o.delivered_at, o.created_at)
+                    END AS created_at
                 FROM customer_order_items oi JOIN customer_orders o ON o.id = oi.order_id
                 WHERE o.status IN ('completed','delivered')
             ) completed_items
@@ -1756,7 +1782,12 @@ class BusinessModel extends Model
             FROM (
                 SELECT total, created_at FROM sales WHERE status = 'completed'
                 UNION ALL
-                SELECT total, created_at FROM customer_orders WHERE status IN ('completed','delivered')
+                SELECT total,
+                    CASE WHEN status = 'completed'
+                        THEN COALESCE(completed_at, delivered_at, created_at)
+                        ELSE COALESCE(delivered_at, created_at)
+                    END AS created_at
+                FROM customer_orders WHERE status IN ('completed','delivered')
             ) completed_sales
             WHERE DATE(created_at) BETWEEN ? AND ?
             GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 31", [$start, $end])->fetchAll();
