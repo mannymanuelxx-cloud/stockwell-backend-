@@ -2,6 +2,7 @@ FROM php:8.2-apache
 
 WORKDIR /var/www/html
 
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 COPY . /var/www/html/
 
 RUN a2enmod rewrite
@@ -9,6 +10,7 @@ RUN a2enmod rewrite
 # LavaLust connects to MySQL through PHP PDO.  The base Apache image does
 # not include this driver, so install it for the Aiven MySQL connection.
 RUN docker-php-ext-install pdo_mysql
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
 ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
 
