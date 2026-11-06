@@ -32,6 +32,15 @@ RUN printf '%s\n' \
 
 RUN a2enconf lavalust
 
+# Render's Docker secret files are readable by group 1000.
+RUN if getent group 1000 >/dev/null; then \
+        secret_group="$(getent group 1000 | cut -d: -f1)"; \
+    else \
+        groupadd --gid 1000 render-secrets; \
+        secret_group=render-secrets; \
+    fi \
+    && usermod --append --groups "$secret_group" www-data
+
 RUN chown -R www-data:www-data /var/www/html
 
 EXPOSE 80
