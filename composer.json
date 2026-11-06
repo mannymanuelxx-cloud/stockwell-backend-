@@ -1,0 +1,19 @@
+{
+    "require": {
+        "phpmailer/phpmailer": "^6.9"
+    },
+    "scripts": {
+        "test": [
+            "php tests/OrderReturnPolicyTest.php",
+            "php tests/BrowserSecurityPolicyTest.php",
+            "php tests/PasswordResetLinkPolicyTest.php",
+            "php tests/StockAdjustmentPolicyTest.php",
+            "php tests/StaffPermissionPolicyTest.php",
+            "php tests/StoreMailerNotificationTest.php",
+            "php tests/PaymentPolicyTest.php",
+            "php tests/ApiEnvironmentConfigTest.php",
+            "php tests/DatabaseEnvironmentConfigTest.php",
+            "php tests/SecurityBoundaryPolicyTest.php"
+        ]
+    }
+}
