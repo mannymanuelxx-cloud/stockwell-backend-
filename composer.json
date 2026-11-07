@@ -1,7 +1,4 @@
 {
-    "require": {
-        "phpmailer/phpmailer": "^6.9"
-    },
     "scripts": {
         "test": [
             "php tests/OrderReturnPolicyTest.php",

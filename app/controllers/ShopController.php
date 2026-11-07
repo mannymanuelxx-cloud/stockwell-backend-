@@ -363,7 +363,7 @@ class ShopController extends Controller
                     (new StoreMailer())->sendOrderUpdate($order, 'order placed');
                 } catch (Throwable $mailError) {
                     error_log('Order confirmation email could not be sent for order #' . $orderId . ': ' . $mailError->getMessage());
-                    $response['notification_warning'] = 'Your order was placed, but the confirmation email could not be sent. Check SMTP configuration.';
+                    $response['notification_warning'] = 'Your order was placed, but the confirmation email could not be sent. Check email provider settings.';
                 }
             }
             $this->respond(201, $response);
@@ -414,7 +414,7 @@ class ShopController extends Controller
             return null;
         } catch (Throwable $error) {
             error_log('Order notification could not be sent for order #' . $orderId . ': ' . $error->getMessage());
-            return 'Your order was updated, but the confirmation email could not be sent. Check SMTP configuration.';
+            return 'Your order was updated, but the confirmation email could not be sent. Check email provider settings.';
         }
     }
 
@@ -428,7 +428,7 @@ class ShopController extends Controller
             return null;
         } catch (Throwable $error) {
             error_log('Return notification could not be sent for request #' . $returnId . ': ' . $error->getMessage());
-            return 'Your return request was saved, but the confirmation email could not be sent. Check SMTP configuration.';
+            return 'Your return request was saved, but the confirmation email could not be sent. Check email provider settings.';
         }
     }
 

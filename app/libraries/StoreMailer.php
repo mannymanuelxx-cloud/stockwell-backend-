@@ -1,11 +1,10 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
-use PHPMailer\PHPMailer\Exception as MailException;
-use PHPMailer\PHPMailer\PHPMailer;
-
 class StoreMailer
 {
+    private const RESEND_API_URL = 'https://api.resend.com/emails';
+
     public function sendOrderUpdate(array $order, $event)
     {
         $name = trim((string) ($order['delivery_name'] ?: $order['name']));
@@ -100,43 +99,86 @@ class StoreMailer
 
     public function send($recipient, $subject, $text, $html = '')
     {
-        $host = trim((string) getenv('SMTP_HOST'));
-        $from = trim((string) getenv('SMTP_FROM'));
-        if ($host === '' || !filter_var($from, FILTER_VALIDATE_EMAIL)) {
-            throw new RuntimeException('SMTP_HOST and a valid SMTP_FROM must be configured before email can be sent.');
+        $apiKey = trim((string) getenv('RESEND_API_KEY'));
+        $fromEmail = trim((string) getenv('RESEND_FROM_EMAIL'));
+        if ($apiKey === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('RESEND_API_KEY and a valid RESEND_FROM_EMAIL must be configured before email can be sent.');
         }
 
-        $mail = new PHPMailer(true);
-        $mail->isSMTP();
-        $mail->Host = $host;
-        $mail->Port = (int) (getenv('SMTP_PORT') ?: 587);
-        $mail->SMTPAuth = trim((string) getenv('SMTP_USERNAME')) !== '';
-        if ($mail->SMTPAuth) {
-            if (trim((string) getenv('SMTP_PASSWORD')) === '') {
-                throw new RuntimeException('SMTP_PASSWORD must be configured when SMTP_USERNAME is set.');
+        if (preg_match('/[\r\n]/', $apiKey)) {
+            throw new RuntimeException('RESEND_API_KEY contains invalid characters.');
+        }
+
+        $recipient = trim((string) $recipient);
+        if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+            throw new InvalidArgumentException('A valid recipient email address is required.');
+        }
+
+        $fromName = trim((string) (getenv('RESEND_FROM_NAME') ?: 'Stockwell'));
+        if ($fromName === '' || preg_match('/[\r\n]/', $fromName)) {
+            throw new RuntimeException('RESEND_FROM_NAME must be a non-empty, single-line value.');
+        }
+
+        $payload = [
+            'from' => $fromName . ' <' . $fromEmail . '>',
+            'to' => [$recipient],
+            'subject' => (string) $subject,
+            'text' => (string) $text
+        ];
+        if ($html !== '') {
+            $payload['html'] = (string) $html;
+        }
+
+        $this->sendViaResend($apiKey, $payload);
+    }
+
+    protected function sendViaResend(string $apiKey, array $payload): void
+    {
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' => [
+                    'Authorization: Bearer ' . $apiKey,
+                    'Content-Type: application/json',
+                    'Accept: application/json'
+                ],
+                'content' => json_encode($payload, JSON_THROW_ON_ERROR),
+                'timeout' => 15,
+                'ignore_errors' => true,
+                'follow_location' => 0,
+                'max_redirects' => 0,
+                'protocol_version' => 1.1
+            ],
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true
+            ]
+        ]);
+        $response = @file_get_contents(self::RESEND_API_URL, false, $context);
+        if (!is_string($response)) {
+            throw new RuntimeException('Email provider request failed over HTTPS. Check outbound network access and provider settings.');
+        }
+
+        $statusCode = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
+                $statusCode = (int) $matches[1];
             }
-            $mail->Username = (string) getenv('SMTP_USERNAME');
-            $mail->Password = (string) getenv('SMTP_PASSWORD');
         }
-        $encryption = strtolower(trim((string) (getenv('SMTP_ENCRYPTION') ?: 'tls')));
-        if ($encryption === 'tls') {
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        } elseif ($encryption === 'ssl') {
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
-        } elseif ($encryption !== 'none') {
-            throw new RuntimeException('SMTP_ENCRYPTION must be tls, ssl, or none.');
+
+        if ($statusCode < 200 || $statusCode >= 300) {
+            $errorName = '';
+            $errorBody = json_decode($response, true);
+            if (is_array($errorBody) && isset($errorBody['name']) && is_string($errorBody['name'])
+                && preg_match('/^[A-Za-z0-9_-]{1,60}$/', $errorBody['name'])) {
+                $errorName = ' (' . $errorBody['name'] . ')';
+            }
+            throw new RuntimeException('Email provider returned HTTP ' . $statusCode . $errorName . '.');
         }
-        $mail->CharSet = PHPMailer::CHARSET_UTF8;
-        $mail->setFrom($from, trim((string) (getenv('SMTP_FROM_NAME') ?: 'Stockwell')));
-        $mail->addAddress($recipient);
-        $mail->Subject = $subject;
-        $mail->Body = $html !== '' ? $html : $text;
-        $mail->AltBody = $text;
-        $mail->isHTML($html !== '');
-        try {
-            $mail->send();
-        } catch (MailException $error) {
-            throw new RuntimeException('SMTP delivery failed: ' . $mail->ErrorInfo, 0, $error);
+
+        $successBody = json_decode($response, true);
+        if (!is_array($successBody) || !isset($successBody['id']) || !is_string($successBody['id']) || $successBody['id'] === '') {
+            throw new RuntimeException('Email provider returned an invalid success response.');
         }
     }
 }

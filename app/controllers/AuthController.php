@@ -200,7 +200,8 @@ class AuthController extends Controller
             } catch (Throwable $error) {
                 try {
                     $this->UsersModel->invalidatePasswordReset($reset['token']);
-                    error_log('Password reset email delivery failed; its token was invalidated so the user can safely retry. Error type: ' . get_class($error));
+                    $detail = $error instanceof RuntimeException ? ' Details: ' . $error->getMessage() : '';
+                    error_log('Password reset email delivery failed; its token was invalidated so the user can safely retry. Error type: ' . get_class($error) . $detail);
                 } catch (Throwable $invalidateError) {
                     error_log(
                         'Password reset email delivery failed and its token could not be invalidated. Delivery error type: '
