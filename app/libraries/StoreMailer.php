@@ -1,6 +1,9 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
+use PHPMailer\PHPMailer\Exception as MailException;
+use PHPMailer\PHPMailer\PHPMailer;
+
 class StoreMailer
 {
     public function sendOrderUpdate(array $order, $event)
@@ -97,109 +100,43 @@ class StoreMailer
 
     public function send($recipient, $subject, $text, $html = '')
     {
-        $relayUrl = trim((string) getenv('GMAIL_RELAY_URL'));
-        $relaySecret = trim((string) getenv('GMAIL_RELAY_SECRET'));
-        $relayParts = $relayUrl !== '' ? parse_url($relayUrl) : false;
-        if ($relayParts === false
-            || strtolower((string) ($relayParts['scheme'] ?? '')) !== 'https'
-            || strtolower((string) ($relayParts['host'] ?? '')) !== 'script.google.com'
-            || isset($relayParts['user'])
-            || isset($relayParts['pass'])
-            || (isset($relayParts['port']) && (int) $relayParts['port'] !== 443)
-            || !preg_match('/^[a-f0-9]{64}$/i', $relaySecret)) {
-            throw new RuntimeException('GMAIL_RELAY_URL and GMAIL_RELAY_SECRET must be configured with a secure Google Apps Script deployment.');
+        $host = trim((string) getenv('SMTP_HOST'));
+        $from = trim((string) getenv('SMTP_FROM'));
+        if ($host === '' || !filter_var($from, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('SMTP_HOST and a valid SMTP_FROM must be configured before email can be sent.');
         }
 
-        $recipient = trim((string) $recipient);
-        if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
-            throw new InvalidArgumentException('A valid recipient email address is required.');
-        }
-
-        if (preg_match('/[\r\n]/', (string) $subject)) {
-            throw new InvalidArgumentException('Email subject must be a single line.');
-        }
-
-        $this->sendViaGmailRelay($relayUrl, $relaySecret, [
-            'secret' => $relaySecret,
-            'to' => $recipient,
-            'subject' => (string) $subject,
-            'text' => (string) $text,
-            'html' => (string) $html
-        ]);
-    }
-
-    protected function sendViaGmailRelay(string $relayUrl, string $relaySecret, array $payload): void
-    {
-        $body = json_encode($payload, JSON_THROW_ON_ERROR);
-        $response = $this->requestGmailRelay($relayUrl, 'POST', $body);
-        $statusCode = $response['status'];
-        if ($statusCode >= 300 && $statusCode < 400 && !empty($response['location'])) {
-            $redirect = parse_url($response['location']);
-            if ($redirect === false
-                || strtolower((string) ($redirect['scheme'] ?? '')) !== 'https'
-                || strtolower((string) ($redirect['host'] ?? '')) !== 'script.googleusercontent.com'
-                || isset($redirect['user'])
-                || isset($redirect['pass'])
-                || (isset($redirect['port']) && (int) $redirect['port'] !== 443)) {
-                throw new RuntimeException('Google Apps Script returned an unexpected HTTPS redirect.');
+        $mail = new PHPMailer(true);
+        $mail->isSMTP();
+        $mail->Host = $host;
+        $mail->Port = (int) (getenv('SMTP_PORT') ?: 587);
+        $mail->SMTPAuth = trim((string) getenv('SMTP_USERNAME')) !== '';
+        if ($mail->SMTPAuth) {
+            if (trim((string) getenv('SMTP_PASSWORD')) === '') {
+                throw new RuntimeException('SMTP_PASSWORD must be configured when SMTP_USERNAME is set.');
             }
-            $response = $this->requestGmailRelay($response['location'], 'GET');
-            $statusCode = $response['status'];
+            $mail->Username = (string) getenv('SMTP_USERNAME');
+            $mail->Password = (string) getenv('SMTP_PASSWORD');
         }
-
-        if ($statusCode < 200 || $statusCode >= 300) {
-            throw new RuntimeException('Google Apps Script email relay returned HTTP ' . $statusCode . '.');
+        $encryption = strtolower(trim((string) (getenv('SMTP_ENCRYPTION') ?: 'tls')));
+        if ($encryption === 'tls') {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        } elseif ($encryption === 'ssl') {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+        } elseif ($encryption !== 'none') {
+            throw new RuntimeException('SMTP_ENCRYPTION must be tls, ssl, or none.');
         }
-
-        $result = json_decode($response['body'], true);
-        if (!is_array($result) || ($result['ok'] ?? false) !== true) {
-            throw new RuntimeException('Google Apps Script email relay rejected the message.');
+        $mail->CharSet = PHPMailer::CHARSET_UTF8;
+        $mail->setFrom($from, trim((string) (getenv('SMTP_FROM_NAME') ?: 'Stockwell')));
+        $mail->addAddress($recipient);
+        $mail->Subject = $subject;
+        $mail->Body = $html !== '' ? $html : $text;
+        $mail->AltBody = $text;
+        $mail->isHTML($html !== '');
+        try {
+            $mail->send();
+        } catch (MailException $error) {
+            throw new RuntimeException('SMTP delivery failed: ' . $mail->ErrorInfo, 0, $error);
         }
-    }
-
-    protected function requestGmailRelay(string $url, string $method, ?string $body = null): array
-    {
-        $headers = ['Accept: application/json'];
-        $options = [
-            'method' => $method,
-            'header' => implode("\r\n", $headers),
-            'timeout' => 20,
-            'ignore_errors' => true,
-            'follow_location' => 0,
-            'max_redirects' => 0,
-            'protocol_version' => 1.1
-        ];
-        if ($method === 'POST') {
-            $options['header'] .= "\r\nContent-Type: application/json";
-            $options['content'] = $body;
-        }
-
-        $context = stream_context_create([
-            'http' => $options,
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true
-            ]
-        ]);
-        $responseBody = @file_get_contents($url, false, $context);
-        $statusCode = 0;
-        $location = '';
-        foreach ($http_response_header ?? [] as $header) {
-            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
-                $statusCode = (int) $matches[1];
-            } elseif (stripos($header, 'Location:') === 0) {
-                $location = trim(substr($header, strlen('Location:')));
-            }
-        }
-
-        if (!is_string($responseBody)) {
-            throw new RuntimeException('Could not reach the Google Apps Script email relay over HTTPS.');
-        }
-
-        return [
-            'status' => $statusCode,
-            'location' => $location,
-            'body' => $responseBody
-        ];
     }
 }
