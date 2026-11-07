@@ -542,7 +542,7 @@ class BusinessController extends Controller
             return null;
         } catch (Throwable $error) {
             error_log('Order notification could not be sent for order #' . $orderId . ': ' . $error->getMessage());
-            return 'The record was saved, but the customer email could not be sent. Check email provider settings.';
+            return 'The record was saved, but the customer email could not be sent. Check SMTP configuration.';
         }
     }
 
@@ -556,7 +556,7 @@ class BusinessController extends Controller
             return null;
         } catch (Throwable $error) {
             error_log('Return notification could not be sent for request #' . $returnId . ': ' . $error->getMessage());
-            return 'The return status was saved, but the customer email could not be sent. Check email provider settings.';
+            return 'The return status was saved, but the customer email could not be sent. Check SMTP configuration.';
         }
     }
 

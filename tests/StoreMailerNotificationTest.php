@@ -12,69 +12,7 @@ class CapturingStoreMailer extends StoreMailer
     }
 }
 
-class CapturingResendStoreMailer extends StoreMailer
-{
-    public $delivery;
-
-    protected function sendViaResend(string $apiKey, array $payload): void
-    {
-        $this->delivery = compact('apiKey', 'payload');
-    }
-}
-
 $tests = [
-    'Resend delivery uses configured sender and both message formats' => function () {
-        $originalApiKey = getenv('RESEND_API_KEY');
-        $originalFromEmail = getenv('RESEND_FROM_EMAIL');
-        $originalFromName = getenv('RESEND_FROM_NAME');
-        putenv('RESEND_API_KEY=re_test_key');
-        putenv('RESEND_FROM_EMAIL=notifications@example.com');
-        putenv('RESEND_FROM_NAME=Stockwell');
-
-        try {
-            $mailer = new CapturingResendStoreMailer();
-            $mailer->send('customer@example.com', 'Test subject', 'Plain text', '<p>HTML</p>');
-        } finally {
-            restoreEnvironmentValue('RESEND_API_KEY', $originalApiKey);
-            restoreEnvironmentValue('RESEND_FROM_EMAIL', $originalFromEmail);
-            restoreEnvironmentValue('RESEND_FROM_NAME', $originalFromName);
-        }
-
-        if ($mailer->delivery['apiKey'] !== 're_test_key') {
-            throw new RuntimeException('Expected the Resend API key to be passed to the delivery client.');
-        }
-        if ($mailer->delivery['payload'] !== [
-            'from' => 'Stockwell <notifications@example.com>',
-            'to' => ['customer@example.com'],
-            'subject' => 'Test subject',
-            'text' => 'Plain text',
-            'html' => '<p>HTML</p>'
-        ]) {
-            throw new RuntimeException('Unexpected Resend email payload.');
-        }
-    },
-    'Resend delivery rejects missing configuration before making a request' => function () {
-        $originalApiKey = getenv('RESEND_API_KEY');
-        $originalFromEmail = getenv('RESEND_FROM_EMAIL');
-        putenv('RESEND_API_KEY');
-        putenv('RESEND_FROM_EMAIL=notifications@example.com');
-
-        try {
-            $mailer = new CapturingResendStoreMailer();
-            try {
-                $mailer->send('customer@example.com', 'Test subject', 'Plain text');
-                throw new RuntimeException('Expected missing Resend API key to be rejected.');
-            } catch (RuntimeException $error) {
-                assertContains('RESEND_API_KEY', $error->getMessage());
-            }
-            if ($mailer->delivery !== null) {
-                throw new RuntimeException('Email delivery must not run with missing configuration.');
-            }
-        } finally {
-            restoreEnvironmentValue('RESEND_API_KEY', $originalApiKey);
-            restoreEnvironmentValue('RESEND_FROM_EMAIL', $originalFromEmail);
-        }
-    },
     'order updates include readable status payment balance and delivery estimate' => function () {
         $mailer = new CapturingStoreMailer();
         $mailer->sendOrderUpdate([
@@ -119,15 +57,6 @@ $tests = [
         assertContains('marked this refund as issued outside Stockwell', $mailer->message['text']);
     }
 ];
-
-function restoreEnvironmentValue($name, $value)
-{
-    if ($value === false) {
-        putenv($name);
-        return;
-    }
-    putenv($name . '=' . $value);
-}
 
 function assertContains($expected, $actual)
 {
