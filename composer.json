@@ -7,6 +7,7 @@
             "php tests/OrderReturnPolicyTest.php",
             "php tests/BrowserSecurityPolicyTest.php",
             "php tests/PasswordResetLinkPolicyTest.php",
+            "php tests/GoogleOAuthProfilePolicyTest.php",
             "php tests/StockAdjustmentPolicyTest.php",
             "php tests/StaffPermissionPolicyTest.php",
             "php tests/StoreMailerNotificationTest.php",

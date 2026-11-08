@@ -2,6 +2,7 @@
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 require_once __DIR__ . '/../libraries/BrowserSecurityPolicy.php';
 require_once __DIR__ . '/../libraries/PasswordResetLinkPolicy.php';
+require_once __DIR__ . '/../libraries/GoogleOAuthProfilePolicy.php';
 
 class AuthController extends Controller
 {
@@ -94,6 +95,131 @@ class AuthController extends Controller
             'user' => $this->sessionUser(),
             'csrf_token' => BrowserSecurityPolicy::csrfToken()
         ]);
+    }
+
+    public function googleStart()
+    {
+        $config = $this->googleOAuthConfig();
+        if ($config === null) {
+            $this->redirectGoogleLoginError();
+            return;
+        }
+
+        $this->startSession();
+        $state = bin2hex(random_bytes(32));
+        $verifier = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        $_SESSION['google_oauth_state'] = $state;
+        $_SESSION['google_oauth_verifier'] = $verifier;
+        $_SESSION['google_oauth_started_at'] = time();
+
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+        $query = http_build_query([
+            'client_id' => $config['client_id'],
+            'redirect_uri' => $config['redirect_uri'],
+            'response_type' => 'code',
+            'scope' => 'openid email profile',
+            'state' => $state,
+            'code_challenge' => $challenge,
+            'code_challenge_method' => 'S256',
+            'prompt' => 'select_account'
+        ]);
+        header('Cache-Control: no-store');
+        header('Location: https://accounts.google.com/o/oauth2/v2/auth?' . $query, true, 302);
+        exit;
+    }
+
+    public function googleCallback()
+    {
+        $this->startSession();
+        $expectedState = $_SESSION['google_oauth_state'] ?? '';
+        $verifier = $_SESSION['google_oauth_verifier'] ?? '';
+        $startedAt = (int) ($_SESSION['google_oauth_started_at'] ?? 0);
+        unset($_SESSION['google_oauth_state'], $_SESSION['google_oauth_verifier'], $_SESSION['google_oauth_started_at']);
+
+        $state = $_GET['state'] ?? '';
+        $code = $_GET['code'] ?? '';
+        if (!is_string($expectedState) || $expectedState === ''
+            || !is_string($state) || !hash_equals($expectedState, $state)
+            || !is_string($verifier) || $verifier === ''
+            || $startedAt < time() - 600
+            || !is_string($code) || $code === ''
+            || isset($_GET['error'])) {
+            $this->redirectGoogleLoginError();
+            return;
+        }
+
+        $config = $this->googleOAuthConfig();
+        if ($config === null) {
+            $this->redirectGoogleLoginError();
+            return;
+        }
+
+        try {
+            $tokenResponse = $this->googleRequest(
+                'https://oauth2.googleapis.com/token',
+                'POST',
+                ['Content-Type: application/x-www-form-urlencoded', 'Accept: application/json'],
+                http_build_query([
+                    'code' => $code,
+                    'client_id' => $config['client_id'],
+                    'client_secret' => $config['client_secret'],
+                    'redirect_uri' => $config['redirect_uri'],
+                    'grant_type' => 'authorization_code',
+                    'code_verifier' => $verifier
+                ])
+            );
+            $accessToken = $tokenResponse['access_token'] ?? '';
+            if (!is_string($accessToken) || $accessToken === '') {
+                throw new RuntimeException('Google OAuth did not return an access token.');
+            }
+
+            $profile = $this->googleRequest(
+                'https://openidconnect.googleapis.com/v1/userinfo',
+                'GET',
+                ['Authorization: Bearer ' . $accessToken, 'Accept: application/json']
+            );
+            $googleProfile = GoogleOAuthProfilePolicy::customerProfile($profile);
+            $googleSub = $googleProfile['subject'];
+            $email = $googleProfile['email'];
+
+            $user = $this->UsersModel->findCustomerForGoogleSubject($googleSub);
+            if (!$user) {
+                $user = $this->UsersModel->findCustomerForGoogleEmail($email);
+                if ($user && !empty($user['google_sub']) && !hash_equals((string) $user['google_sub'], $googleSub)) {
+                    throw new RuntimeException('This customer account is linked to a different Google account.');
+                }
+                if ($user) {
+                    $user = $this->UsersModel->linkGoogleSubjectToCustomer((int) $user['id'], $googleSub);
+                } elseif ($this->UsersModel->findForAuthentication($email)) {
+                    throw new RuntimeException('Google sign-in is available for customer accounts only.');
+                } else {
+                    $user = $this->UsersModel->registerGoogleCustomer(
+                        $googleProfile['firstname'],
+                        $googleProfile['lastname'],
+                        $email,
+                        $googleSub
+                    );
+                }
+            }
+            if (!$user || ($user['role'] ?? '') !== 'customer') {
+                throw new RuntimeException('Google sign-in is available for customer accounts only.');
+            }
+
+            $this->authenticate($user);
+            $frontendUrl = PasswordResetLinkPolicy::frontendUrl(
+                getenv('APP_FRONTEND_URL') ?: '',
+                config_item('environment')
+            );
+            if ($frontendUrl === null) {
+                throw new RuntimeException('APP_FRONTEND_URL is not configured as a trusted frontend URL.');
+            }
+            header('Cache-Control: no-store');
+            header('Location: ' . rtrim($frontendUrl, '/') . '/#shop', true, 302);
+            exit;
+        } catch (Throwable $error) {
+            error_log('Google sign-in failed. Error type: ' . get_class($error) . '.');
+            $this->redirectGoogleLoginError();
+        }
     }
 
     public function apiRegister()
@@ -338,6 +464,81 @@ class AuthController extends Controller
         }
 
         session_destroy();
+    }
+
+    private function googleOAuthConfig()
+    {
+        $clientId = trim((string) getenv('GOOGLE_OAUTH_CLIENT_ID'));
+        $clientSecret = trim((string) getenv('GOOGLE_OAUTH_CLIENT_SECRET'));
+        $redirectUri = trim((string) getenv('GOOGLE_OAUTH_REDIRECT_URI'));
+        $parts = $redirectUri !== '' ? parse_url($redirectUri) : false;
+        if ($clientId === '' || $clientSecret === '' || $parts === false
+            || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || empty($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['query'])
+            || isset($parts['fragment'])
+            || (isset($parts['port']) && (int) $parts['port'] !== 443)
+            || ($parts['path'] ?? '') !== '/api/auth/google/callback') {
+            return null;
+        }
+
+        return [
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret,
+            'redirect_uri' => $redirectUri
+        ];
+    }
+
+    private function googleRequest($url, $method, array $headers, $body = null)
+    {
+        $options = [
+            'method' => $method,
+            'header' => implode("\r\n", $headers),
+            'timeout' => 15,
+            'ignore_errors' => true,
+            'follow_location' => 0,
+            'max_redirects' => 0,
+            'protocol_version' => 1.1
+        ];
+        if ($body !== null) $options['content'] = $body;
+
+        $context = stream_context_create([
+            'http' => $options,
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+        ]);
+        $response = @file_get_contents($url, false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
+                $status = (int) $matches[1];
+            }
+        }
+        if (!is_string($response) || $status < 200 || $status >= 300) {
+            throw new RuntimeException('Google OAuth request failed with HTTP ' . $status . '.');
+        }
+
+        $payload = json_decode($response, true);
+        if (!is_array($payload)) {
+            throw new RuntimeException('Google OAuth returned an invalid response.');
+        }
+        return $payload;
+    }
+
+    private function redirectGoogleLoginError()
+    {
+        $frontendUrl = PasswordResetLinkPolicy::frontendUrl(
+            getenv('APP_FRONTEND_URL') ?: '',
+            config_item('environment')
+        );
+        if ($frontendUrl === null) {
+            $this->respond(503, ['error' => 'Google sign-in is unavailable. Please use your Stockwell username and password.']);
+            return;
+        }
+        header('Cache-Control: no-store');
+        header('Location: ' . rtrim($frontendUrl, '/') . '/?auth_error=google', true, 302);
+        exit;
     }
 
     private function readPayload()

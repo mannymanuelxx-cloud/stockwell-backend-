@@ -11,7 +11,7 @@ require_once __DIR__ . '/../libraries/SessionAuthenticationPolicy.php';
 class UsersModel extends Model
 {
     // Increment when the auth schema changes so migrations run once again.
-    private const AUTH_SCHEMA_VERSION = 1;
+    private const AUTH_SCHEMA_VERSION = 2;
 
     /**
      * Table associated with the model
@@ -99,6 +99,9 @@ class UsersModel extends Model
         if (!$this->db->raw("SHOW COLUMNS FROM users LIKE 'permission_overrides'")->fetch()) {
             $this->db->raw("ALTER TABLE users ADD COLUMN permission_overrides TEXT NULL AFTER role");
         }
+        if (!$this->db->raw("SHOW COLUMNS FROM users LIKE 'google_sub'")->fetch()) {
+            $this->db->raw("ALTER TABLE users ADD COLUMN google_sub VARCHAR(255) NULL AFTER email");
+        }
 
         if (!$this->db->raw("SHOW INDEX FROM users WHERE Key_name = 'users_username_unique'")->fetch()) {
             $duplicate = $this->db->raw('SELECT username FROM users GROUP BY username HAVING COUNT(*) > 1 LIMIT 1')->fetch();
@@ -114,6 +117,9 @@ class UsersModel extends Model
                 throw new RuntimeException('Duplicate email addresses must be resolved before enabling customer registration.');
             }
             $this->db->raw('CREATE UNIQUE INDEX users_email_unique ON users (email)');
+        }
+        if (!$this->db->raw("SHOW INDEX FROM users WHERE Key_name = 'users_google_sub_unique'")->fetch()) {
+            $this->db->raw('CREATE UNIQUE INDEX users_google_sub_unique ON users (google_sub)');
         }
     }
 
@@ -442,6 +448,101 @@ class UsersModel extends Model
         );
 
         return $statement->fetch();
+    }
+
+    public function findCustomerForGoogleSubject($googleSub)
+    {
+        return $this->db->raw(
+            "SELECT id, firstname, lastname, email, username, password, role, google_sub
+             FROM users
+             WHERE google_sub = ? AND role = 'customer'
+             LIMIT 1",
+            [$googleSub]
+        )->fetch();
+    }
+
+    public function findCustomerForGoogleEmail($email)
+    {
+        return $this->db->raw(
+            "SELECT id, firstname, lastname, email, username, password, role, google_sub
+             FROM users
+             WHERE LOWER(email) = LOWER(?) AND role = 'customer'
+             LIMIT 1",
+            [$email]
+        )->fetch();
+    }
+
+    public function linkGoogleSubjectToCustomer($userId, $googleSub)
+    {
+        $this->db->transaction();
+        try {
+            $user = $this->db->raw(
+                'SELECT id, role, google_sub FROM users WHERE id = ? FOR UPDATE',
+                [(int) $userId]
+            )->fetch();
+            if (!$user || $user['role'] !== 'customer') {
+                throw new InvalidArgumentException('Google sign-in is available for customer accounts only.');
+            }
+            if (!empty($user['google_sub']) && !hash_equals((string) $user['google_sub'], $googleSub)) {
+                throw new InvalidArgumentException('This customer account is linked to a different Google account.');
+            }
+            if (empty($user['google_sub'])) {
+                $this->db->table($this->table)->where('id', (int) $userId)->update([
+                    'google_sub' => $googleSub
+                ]);
+            }
+            $this->db->commit();
+            return $this->findForAuthenticationById((int) $userId);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            throw $error;
+        }
+    }
+
+    public function registerGoogleCustomer($firstname, $lastname, $email, $googleSub)
+    {
+        $existing = $this->db->raw(
+            'SELECT id FROM users WHERE LOWER(email) = LOWER(?) OR google_sub = ? LIMIT 1',
+            [$email, $googleSub]
+        )->fetch();
+        if ($existing) {
+            throw new InvalidArgumentException('An account already uses this email address.');
+        }
+
+        $username = 'google_' . bin2hex(random_bytes(12));
+        $password = bin2hex(random_bytes(32));
+        $this->db->transaction();
+        try {
+            $this->db->table($this->table)->insert([
+                'firstname' => $firstname,
+                'lastname' => $lastname,
+                'email' => $email,
+                'google_sub' => $googleSub,
+                'username' => $username,
+                'password' => password_hash($password, PASSWORD_DEFAULT),
+                'role' => 'customer'
+            ]);
+            $userId = (int) $this->db->last_id();
+            $this->db->table('customers')->insert([
+                'user_id' => $userId,
+                'name' => trim($firstname . ' ' . $lastname),
+                'email' => $email
+            ]);
+            $this->db->commit();
+            return $this->findForAuthentication($username);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            throw $error;
+        }
+    }
+
+    private function findForAuthenticationById($userId)
+    {
+        return $this->db->raw(
+            'SELECT id, firstname, lastname, email, username, password, role
+             FROM users WHERE id = ? LIMIT 1',
+            [(int) $userId]
+        )->fetch();
     }
 
     public function registerCustomer($firstname, $lastname, $email, $username, $password, $address)

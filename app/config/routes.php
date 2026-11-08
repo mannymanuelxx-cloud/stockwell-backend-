@@ -124,6 +124,8 @@ $router->get('/api/shop/returns', 'ShopController::returns');
 $router->post('/api/shop/returns', 'ShopController::createReturn');
 $router->get('/api/auth/session', 'AuthController::sessionStatus');
 $router->post('/api/auth/login', 'AuthController::apiLogin');
+$router->get('/api/auth/google/start', 'AuthController::googleStart');
+$router->get('/api/auth/google/callback', 'AuthController::googleCallback');
 $router->post('/api/auth/register', 'AuthController::apiRegister');
 $router->post('/api/auth/forgot-password', 'AuthController::forgotPassword');
 $router->post('/api/auth/reset-password', 'AuthController::resetPassword');
