@@ -100,6 +100,44 @@ class StoreMailer
 
     public function send($recipient, $subject, $text, $html = '')
     {
+        $apiKey = trim((string) getenv('BREVO_API_KEY'));
+        if ($apiKey !== '') {
+            $from = trim((string) getenv('BREVO_FROM_EMAIL'));
+            if (!filter_var($from, FILTER_VALIDATE_EMAIL)) {
+                throw new RuntimeException('A valid, verified BREVO_FROM_EMAIL must be configured before email can be sent.');
+            }
+            if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+                throw new RuntimeException('A valid recipient email address is required.');
+            }
+
+            $payload = [
+                'sender' => [
+                    'email' => $from,
+                    'name' => trim((string) (getenv('BREVO_FROM_NAME') ?: 'Stockwell'))
+                ],
+                'to' => [['email' => $recipient]],
+                'subject' => $subject,
+                'textContent' => $text
+            ];
+            if ($html !== '') {
+                $payload['htmlContent'] = $html;
+            }
+
+            $replyTo = trim((string) getenv('BREVO_REPLY_TO'));
+            if ($replyTo !== '') {
+                if (!filter_var($replyTo, FILTER_VALIDATE_EMAIL)) {
+                    throw new RuntimeException('BREVO_REPLY_TO must be a valid email address when configured.');
+                }
+                $payload['replyTo'] = [
+                    'email' => $replyTo,
+                    'name' => trim((string) (getenv('BREVO_REPLY_TO_NAME') ?: 'Stockwell'))
+                ];
+            }
+
+            $this->sendBrevoMessage($payload, $apiKey);
+            return;
+        }
+
         $host = trim((string) getenv('SMTP_HOST'));
         $from = trim((string) getenv('SMTP_FROM'));
         if ($host === '' || !filter_var($from, FILTER_VALIDATE_EMAIL)) {
@@ -137,6 +175,51 @@ class StoreMailer
             $mail->send();
         } catch (MailException $error) {
             throw new RuntimeException('SMTP delivery failed: ' . $mail->ErrorInfo, 0, $error);
+        }
+    }
+
+    protected function sendBrevoMessage(array $payload, $apiKey)
+    {
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($body)) {
+            throw new RuntimeException('Could not encode the Brevo email request.');
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' => implode("\r\n", [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'api-key: ' . $apiKey
+                ]),
+                'content' => $body,
+                'timeout' => 20,
+                'ignore_errors' => true,
+                'follow_location' => 0,
+                'max_redirects' => 0,
+                'protocol_version' => 1.1
+            ],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+        ]);
+        $response = @file_get_contents('https://api.brevo.com/v3/smtp/email', false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
+                $status = (int) $matches[1];
+            }
+        }
+        if (!is_string($response) || $status < 200 || $status >= 300) {
+            $message = '';
+            $responsePayload = is_string($response) ? json_decode($response, true) : null;
+            if (is_array($responsePayload) && is_string($responsePayload['message'] ?? null)) {
+                $message = preg_replace('/[\r\n\x00-\x1F\x7F]+/', ' ', $responsePayload['message']);
+                $message = substr(trim($message), 0, 250);
+            }
+            throw new RuntimeException(
+                'Brevo transactional email request failed with HTTP ' . $status
+                . ($message !== '' ? ': ' . $message : '.')
+            );
         }
     }
 }

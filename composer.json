@@ -10,6 +10,7 @@
             "php tests/GoogleOAuthProfilePolicyTest.php",
             "php tests/StockAdjustmentPolicyTest.php",
             "php tests/StaffPermissionPolicyTest.php",
+            "php tests/StoreMailerBrevoTest.php",
             "php tests/StoreMailerNotificationTest.php",
             "php tests/PaymentPolicyTest.php",
             "php tests/BusinessReportDataTest.php",
