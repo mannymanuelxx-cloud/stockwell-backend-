@@ -123,6 +123,7 @@ $router->delete('/api/shop/addresses/{id}', 'ShopController::deleteAddress');
 $router->get('/api/shop/returns', 'ShopController::returns');
 $router->post('/api/shop/returns', 'ShopController::createReturn');
 $router->get('/api/auth/session', 'AuthController::sessionStatus');
+$router->get('/api/auth/public-config', 'AuthController::publicConfig');
 $router->post('/api/auth/login', 'AuthController::apiLogin');
 $router->get('/api/auth/google/start', 'AuthController::googleStart');
 $router->get('/api/auth/google/callback', 'AuthController::googleCallback');

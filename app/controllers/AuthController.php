@@ -3,6 +3,7 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 require_once __DIR__ . '/../libraries/BrowserSecurityPolicy.php';
 require_once __DIR__ . '/../libraries/PasswordResetLinkPolicy.php';
 require_once __DIR__ . '/../libraries/GoogleOAuthProfilePolicy.php';
+require_once __DIR__ . '/../libraries/CloudflareTurnstilePolicy.php';
 
 class AuthController extends Controller
 {
@@ -63,6 +64,33 @@ class AuthController extends Controller
             'authenticated' => true,
             'user' => $this->sessionUser(),
             'csrf_token' => $csrfToken
+        ]);
+    }
+
+    public function publicConfig()
+    {
+        $turnstileSiteKey = trim((string) getenv('TURNSTILE_SITE_KEY'));
+        $turnstileSecretKey = trim((string) getenv('TURNSTILE_SECRET_KEY'));
+        $frontendUrl = PasswordResetLinkPolicy::frontendUrl(
+            getenv('APP_FRONTEND_URL') ?: '',
+            config_item('environment')
+        );
+        $turnstileEnabled = $turnstileSiteKey !== ''
+            && $turnstileSecretKey !== ''
+            && $frontendUrl !== null;
+
+        $measurementId = trim((string) getenv('GA4_MEASUREMENT_ID'));
+        if ($measurementId !== '' && !preg_match('/^G-[A-Z0-9]+$/', $measurementId)) {
+            error_log('Google Analytics configuration is invalid; page-view tracking is disabled.');
+            $measurementId = '';
+        }
+
+        header('Cache-Control: public, max-age=300');
+        $this->respond(200, [
+            'integrations' => [
+                'turnstile_site_key' => $turnstileEnabled ? $turnstileSiteKey : '',
+                'ga4_measurement_id' => $measurementId
+            ]
         ]);
     }
 
@@ -257,6 +285,10 @@ class AuthController extends Controller
         }
         if (!is_string($address) || strlen(trim($address)) < 15 || strlen(trim($address)) > 500) {
             $this->respond(422, ['error' => 'Enter a delivery address of 15 to 500 characters.']);
+            return;
+        }
+        $turnstileToken = $payload['turnstile_token'] ?? '';
+        if (!is_string($turnstileToken) || !$this->verifyRegistrationTurnstile($turnstileToken)) {
             return;
         }
 
@@ -539,6 +571,88 @@ class AuthController extends Controller
         header('Cache-Control: no-store');
         header('Location: ' . rtrim($frontendUrl, '/') . '/?auth_error=google', true, 302);
         exit;
+    }
+
+    private function verifyRegistrationTurnstile($token)
+    {
+        $siteKey = trim((string) getenv('TURNSTILE_SITE_KEY'));
+        $secretKey = trim((string) getenv('TURNSTILE_SECRET_KEY'));
+        if ($siteKey === '' && $secretKey === '') return true;
+        if ($siteKey === '' || $secretKey === '') {
+            error_log('Cloudflare Turnstile configuration is incomplete.');
+            $this->respond(503, ['error' => 'Customer registration security check is temporarily unavailable. Please try again later.']);
+            return false;
+        }
+        if ($token === '' || strlen($token) > 2048) {
+            $this->respond(403, ['error' => 'Complete the security check before creating your account.']);
+            return false;
+        }
+
+        $frontendUrl = PasswordResetLinkPolicy::frontendUrl(
+            getenv('APP_FRONTEND_URL') ?: '',
+            config_item('environment')
+        );
+        $frontendParts = $frontendUrl !== null ? parse_url($frontendUrl) : false;
+        $expectedHostname = is_array($frontendParts) ? strtolower((string) ($frontendParts['host'] ?? '')) : '';
+        if ($expectedHostname === '') {
+            error_log('Cloudflare Turnstile cannot verify registration without a valid APP_FRONTEND_URL.');
+            $this->respond(503, ['error' => 'Customer registration security check is temporarily unavailable. Please try again later.']);
+            return false;
+        }
+
+        $options = [
+            'method' => 'POST',
+            'header' => "Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json",
+            'content' => http_build_query([
+                'secret' => $secretKey,
+                'response' => $token,
+                'idempotency_key' => $this->turnstileIdempotencyKey()
+            ]),
+            'timeout' => 10,
+            'ignore_errors' => true,
+            'follow_location' => 0,
+            'max_redirects' => 0,
+            'protocol_version' => 1.1
+        ];
+        $context = stream_context_create([
+            'http' => $options,
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+        ]);
+        $response = @file_get_contents('https://challenges.cloudflare.com/turnstile/v0/siteverify', false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
+                $status = (int) $matches[1];
+            }
+        }
+        if (!is_string($response) || $status < 200 || $status >= 300) {
+            error_log('Cloudflare Turnstile verification request failed with HTTP ' . $status . '.');
+            $this->respond(503, ['error' => 'Customer registration security check is temporarily unavailable. Please try again later.']);
+            return false;
+        }
+
+        $verification = json_decode($response, true);
+        if (!is_array($verification)) {
+            error_log('Cloudflare Turnstile returned an invalid verification response.');
+            $this->respond(503, ['error' => 'Customer registration security check is temporarily unavailable. Please try again later.']);
+            return false;
+        }
+        if (!CloudflareTurnstilePolicy::isValidRegistrationResponse($verification, $expectedHostname)) {
+            $this->respond(403, ['error' => 'The security check could not be verified. Please try again.']);
+            return false;
+        }
+
+        return true;
+    }
+
+    private function turnstileIdempotencyKey()
+    {
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+        $hex = bin2hex($bytes);
+        return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-' . substr($hex, 12, 4)
+            . '-' . substr($hex, 16, 4) . '-' . substr($hex, 20);
     }
 
     private function readPayload()
