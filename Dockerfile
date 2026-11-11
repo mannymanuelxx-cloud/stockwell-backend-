@@ -10,8 +10,9 @@ RUN a2enmod rewrite
 # LavaLust connects to MySQL through PHP PDO.  The base Apache image does
 # not include this driver, so install it for the Aiven MySQL connection.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends unzip \
-    && docker-php-ext-install pdo_mysql \
+    && apt-get install -y --no-install-recommends unzip libjpeg62-turbo-dev libpng-dev libwebp-dev \
+    && docker-php-ext-configure gd --with-jpeg --with-webp \
+    && docker-php-ext-install pdo_mysql gd \
     && rm -rf /var/lib/apt/lists/*
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
