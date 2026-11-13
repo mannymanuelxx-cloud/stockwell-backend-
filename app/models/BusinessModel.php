@@ -7,7 +7,7 @@ require_once __DIR__ . '/../libraries/PaymentPolicy.php';
 class BusinessModel extends Model
 {
     // Increment when the business schema changes so migrations run once again.
-    private const SCHEMA_VERSION = 3;
+    private const SCHEMA_VERSION = 4;
 
     private function ensureSalesSchema()
     {
@@ -236,6 +236,9 @@ class BusinessModel extends Model
             }
             if (!$this->db->raw("SHOW COLUMNS FROM customer_orders LIKE 'amount_paid'")->fetch()) {
                 $this->db->raw("ALTER TABLE customer_orders ADD COLUMN amount_paid DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER payment_method");
+            }
+            if (!$this->db->raw("SHOW COLUMNS FROM customer_orders LIKE 'gcash_payment_reference'")->fetch()) {
+                $this->db->raw('ALTER TABLE customer_orders ADD COLUMN gcash_payment_reference VARCHAR(100) NULL');
             }
             if ($addedOrderPaymentStatus) {
                 $this->db->raw("UPDATE customer_orders SET payment_status = 'paid', amount_paid = total
@@ -545,7 +548,8 @@ class BusinessModel extends Model
     {
         return $this->db->raw(
             "SELECT o.id, o.status, o.total, o.subtotal, o.delivery_zone, o.delivery_fee, o.delivery_discount,
-                o.payment_status, o.payment_method, o.amount_paid, o.delivery_address, o.estimated_delivery_at, o.created_at,
+                o.payment_status, o.payment_method, o.amount_paid, o.gcash_payment_reference,
+                o.delivery_address, o.estimated_delivery_at, o.created_at,
                 (SELECT COUNT(*) FROM customer_order_items i WHERE i.order_id = o.id) AS item_count,
                 (SELECT i.product_name FROM customer_order_items i WHERE i.order_id = o.id ORDER BY i.id LIMIT 1) AS preview_product_name,
                 (SELECT i.product_id FROM customer_order_items i WHERE i.order_id = o.id ORDER BY i.id LIMIT 1) AS preview_product_id,
@@ -647,7 +651,7 @@ class BusinessModel extends Model
     {
         $order = $this->db->raw(
             'SELECT id, status, total, subtotal, delivery_zone, delivery_fee, delivery_discount,
-                payment_status, payment_method, amount_paid, delivery_address,
+                payment_status, payment_method, amount_paid, gcash_payment_reference, delivery_address,
                 delivery_phone, delivery_name, delivery_notes, courier, tracking_number, tracking_url,
                 estimated_delivery_at, delivered_at, created_at, updated_at, stock_reserved
              FROM customer_orders WHERE id = ? AND customer_id = ? LIMIT 1',
@@ -986,7 +990,8 @@ class BusinessModel extends Model
         $this->db->transaction();
         try {
             $order = $this->db->raw(
-                'SELECT id, status, stock_reserved, payment_status, amount_paid
+                'SELECT id, status, stock_reserved, payment_status, payment_method, amount_paid,
+                    gcash_payment_reference
                  FROM customer_orders WHERE id = ? AND customer_id = ? FOR UPDATE',
                 [(int) $orderId, (int) $customerId]
             )->fetch();
@@ -996,6 +1001,9 @@ class BusinessModel extends Model
             }
             if ($order['payment_status'] !== 'unpaid' || (float) $order['amount_paid'] > 0) {
                 throw new InvalidArgumentException('This order has a payment recorded. Contact the store to arrange cancellation and any applicable refund.');
+            }
+            if ($order['payment_method'] === 'gcash' && !empty($order['gcash_payment_reference'])) {
+                throw new InvalidArgumentException('This order has a submitted GCash reference. Contact the store before cancelling so the payment can be checked.');
             }
             if (!empty($order['stock_reserved'])) {
                 $items = $this->db->raw(
@@ -1208,8 +1216,11 @@ class BusinessModel extends Model
         }
     }
 
-    public function createShopOrder($customerId, array $items, $address, $phone = '', $notes = '', $recipientName = '', $deliveryZoneId = null)
+    public function createShopOrder($customerId, array $items, $address, $phone = '', $notes = '', $recipientName = '', $deliveryZoneId = null, $paymentMethod = 'cash')
     {
+        if (!in_array($paymentMethod, ['cash', 'gcash'], true)) {
+            throw new InvalidArgumentException('Choose Cash on delivery or GCash.');
+        }
         if (!is_string($address) || trim($address) === '' || mb_strlen(trim($address)) > 500) {
             throw new InvalidArgumentException('Enter a delivery address of 500 characters or fewer.');
         }
@@ -1275,7 +1286,7 @@ class BusinessModel extends Model
                 'status' => 'pending',
                 'stock_reserved' => 1,
                 'payment_status' => 'unpaid',
-                'payment_method' => 'cash',
+                'payment_method' => $paymentMethod,
                 'amount_paid' => 0,
                 'delivery_address' => trim($address),
                 'delivery_phone' => trim($phone),
@@ -1295,9 +1306,46 @@ class BusinessModel extends Model
                     [$item['quantity'], $item['product_id']]
                 );
             }
+
             $this->recordCustomerOrderNotification((int) $customerId, $orderId, 'pending');
             $this->db->commit();
             return $orderId;
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            throw $error;
+        }
+    }
+
+    public function submitCustomerGcashReference($customerId, $orderId, $reference)
+    {
+        if (!is_string($reference)) {
+            throw new InvalidArgumentException('Enter the GCash transaction reference.');
+        }
+        $reference = trim($reference);
+        if (mb_strlen($reference) < 6 || mb_strlen($reference) > 100
+            || preg_match('/[\x00-\x1F\x7F]/', $reference)) {
+            throw new InvalidArgumentException('Transaction reference must be 6 to 100 printable characters.');
+        }
+        $this->db->transaction();
+        try {
+            $order = $this->db->raw(
+                'SELECT id, status, payment_status, payment_method
+                 FROM customer_orders WHERE id = ? AND customer_id = ? FOR UPDATE',
+                [(int) $orderId, (int) $customerId]
+            )->fetch();
+            if (!$order) throw new InvalidArgumentException('Order not found.');
+            if ($order['payment_method'] !== 'gcash') {
+                throw new InvalidArgumentException('This order does not use GCash.');
+            }
+            if ($order['status'] === 'cancelled'
+                || in_array($order['payment_status'], ['paid', 'refunded'], true)) {
+                throw new InvalidArgumentException('A payment reference cannot be submitted for a cancelled or already paid order.');
+            }
+            $this->db->table('customer_orders')->where('id', (int) $orderId)->update([
+                'gcash_payment_reference' => $reference
+            ]);
+            $this->db->commit();
+            return true;
         } catch (Throwable $error) {
             $this->db->roll_back();
             throw $error;
@@ -1686,10 +1734,21 @@ class BusinessModel extends Model
     {
         $this->db->transaction();
         try {
-            $order = $this->db->raw('SELECT id, total, status FROM customer_orders WHERE id = ? FOR UPDATE', [$id])->fetch();
+            $order = $this->db->raw(
+                'SELECT id, total, status, payment_method, gcash_payment_reference
+                 FROM customer_orders WHERE id = ? FOR UPDATE',
+                [$id]
+            )->fetch();
             if (!$order) throw new InvalidArgumentException('Record not found.');
             $paymentData = $this->paymentData($payment, (float) $order['total']);
-            PaymentPolicy::assertOrderPaymentTiming($paymentData['payment_status'], $order['status']);
+            $verifiedGcashReference = $order['payment_method'] === 'gcash'
+                && $paymentData['payment_method'] === 'gcash'
+                && !empty($order['gcash_payment_reference']);
+            PaymentPolicy::assertOrderPaymentTiming(
+                $paymentData['payment_status'],
+                $order['status'],
+                $verifiedGcashReference
+            );
             $this->db->table('customer_orders')->where('id', $id)->update($paymentData);
             $this->db->commit();
         } catch (Throwable $error) {

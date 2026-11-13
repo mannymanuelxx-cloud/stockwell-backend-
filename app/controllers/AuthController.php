@@ -84,12 +84,15 @@ class AuthController extends Controller
             error_log('Google Analytics configuration is invalid; page-view tracking is disabled.');
             $measurementId = '';
         }
+        require_once ROOT_DIR . 'app/libraries/ManualGcashCheckout.php';
+        $gcashDetails = (new ManualGcashCheckout())->publicDetails();
 
         header('Cache-Control: public, max-age=300');
         $this->respond(200, [
             'integrations' => [
                 'turnstile_site_key' => $turnstileEnabled ? $turnstileSiteKey : '',
-                'ga4_measurement_id' => $measurementId
+                'ga4_measurement_id' => $measurementId,
+                'manual_gcash' => $gcashDetails
             ]
         ]);
     }

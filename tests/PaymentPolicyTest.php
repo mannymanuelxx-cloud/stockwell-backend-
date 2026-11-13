@@ -32,6 +32,12 @@ $tests = [
         PaymentPolicy::assertOrderPaymentTiming('unpaid', 'pending');
         PaymentPolicy::assertOrderPaymentTiming('paid', 'delivered');
         PaymentPolicy::assertOrderPaymentTiming('paid', 'completed');
+        PaymentPolicy::assertOrderPaymentTiming('paid', 'pending', true);
+        PaymentPolicy::assertOrderPaymentTiming('paid', 'shipped', true);
+        assertThrows(
+            fn () => PaymentPolicy::assertOrderPaymentTiming('paid', 'cancelled', true),
+            'only be marked paid after it has been delivered'
+        );
     },
     'cash-on-delivery orders are automatically paid when delivered' => function () {
         assertSame(

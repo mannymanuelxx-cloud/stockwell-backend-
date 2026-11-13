@@ -2,6 +2,7 @@
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 require_once __DIR__ . '/../libraries/ProductReviewPolicy.php';
 require_once __DIR__ . '/../libraries/BrowserSecurityPolicy.php';
+require_once __DIR__ . '/../libraries/ManualGcashCheckout.php';
 
 class ShopController extends Controller
 {
@@ -146,6 +147,45 @@ class ShopController extends Controller
             $warning = $this->sendOrderNotification((int) $id, 'order cancelled');
             if ($warning) $response['notification_warning'] = $warning;
             $this->respond(200, $response);
+        } catch (InvalidArgumentException $error) {
+            $status = $error->getMessage() === 'Order not found.' ? 404 : 422;
+            $this->respond($status, ['error' => $error->getMessage()]);
+        }
+    }
+
+    public function submitPaymentReference($id = null)
+    {
+        if (!$this->requireCustomer()) return;
+        $orderId = filter_var($id, FILTER_VALIDATE_INT);
+        if ($orderId === false || $orderId < 1) {
+            $this->respond(400, ['error' => 'A valid order ID is required.']);
+            return;
+        }
+        $payload = $this->api->body();
+        if (!is_array($payload)) {
+            $this->respond(400, ['error' => 'Request body must be valid JSON.']);
+            return;
+        }
+        $customerId = $this->BusinessModel->customerIdForUser((int) $_SESSION['user_id']);
+        if (!$customerId) {
+            $this->respond(403, ['error' => 'Your customer profile could not be found.']);
+            return;
+        }
+        try {
+            $this->BusinessModel->submitCustomerGcashReference(
+                $customerId,
+                $orderId,
+                $payload['reference'] ?? null
+            );
+            $this->BusinessModel->logActivity(
+                (int) $_SESSION['user_id'],
+                $_SESSION['username'] ?? 'Customer',
+                'updated payment',
+                'order',
+                $orderId,
+                'GCash transaction reference submitted'
+            );
+            $this->respond(200, ['success' => true]);
         } catch (InvalidArgumentException $error) {
             $status = $error->getMessage() === 'Order not found.' ? 404 : 422;
             $this->respond($status, ['error' => $error->getMessage()]);
@@ -340,6 +380,17 @@ class ShopController extends Controller
             return;
         }
 
+        $paymentMethod = $payload['payment_method'] ?? 'cash';
+        if (!is_string($paymentMethod) || !in_array($paymentMethod, ['cash', 'gcash'], true)) {
+            $this->respond(422, ['error' => 'Choose Cash on delivery or GCash.']);
+            return;
+        }
+        $gcash = new ManualGcashCheckout();
+        if ($paymentMethod === 'gcash' && !$gcash->isConfigured()) {
+            $this->respond(503, ['error' => 'GCash checkout is temporarily unavailable. Choose Cash on delivery or try again later.']);
+            return;
+        }
+
         try {
             $orderId = $this->BusinessModel->createShopOrder(
                 $customerId,
@@ -348,7 +399,8 @@ class ShopController extends Controller
                 $payload['phone'] ?? null,
                 $payload['delivery_notes'] ?? '',
                 $payload['recipient_name'] ?? null,
-                $payload['delivery_zone_id'] ?? null
+                $payload['delivery_zone_id'] ?? null,
+                $paymentMethod
             );
             $this->BusinessModel->logActivity((int) $_SESSION['user_id'], $_SESSION['username'] ?? 'Customer', 'placed', 'order', $orderId);
             $response = ['data' => ['id' => $orderId]];

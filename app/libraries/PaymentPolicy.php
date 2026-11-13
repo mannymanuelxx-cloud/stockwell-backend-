@@ -24,9 +24,11 @@ final class PaymentPolicy
         ];
     }
 
-    public static function assertOrderPaymentTiming($paymentStatus, $orderStatus)
+    public static function assertOrderPaymentTiming($paymentStatus, $orderStatus, $allowPreDeliveryGcash = false)
     {
-        if ($paymentStatus === 'paid' && !in_array($orderStatus, ['delivered', 'completed'], true)) {
+        if ($paymentStatus === 'paid'
+            && !in_array($orderStatus, ['delivered', 'completed'], true)
+            && !($allowPreDeliveryGcash && $orderStatus !== 'cancelled')) {
             throw new InvalidArgumentException('An order can only be marked paid after it has been delivered.');
         }
     }

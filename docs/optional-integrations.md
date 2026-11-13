@@ -34,6 +34,25 @@ Web data stream settings, disable Enhanced Measurement events other than page
 views if you want to keep this page-view-only scope. Visitors can change their
 choice with **Privacy choices** in the footer.
 
+## Manual GCash transfer
+
+1. In the GCash app, open **Receive Money / My QR** and save the correct
+   receiving QR image. Host it at a public HTTPS image URL ending in `.png`,
+   `.jpg`, `.jpeg`, or `.webp`.
+2. Add these values to the Render `stockwell-api` environment:
+   - `GCASH_ACCOUNT_NAME`: the recipient name shown in GCash
+   - `GCASH_ACCOUNT_NUMBER`: the receiving GCash mobile/account number
+   - `GCASH_QR_IMAGE_URL`: public HTTPS URL of the QR image
+3. Keep the receiving details accurate. They are intentionally displayed to
+   storefront customers. Never use someone else's QR/account without consent.
+4. Redeploy the API and refresh the storefront. GCash appears only when all
+   three values are valid.
+
+Customers can still choose Cash on delivery. For GCash, the customer places the
+order, transfers the exact displayed total, then submits the transaction
+reference under **My orders ? Details**. The order remains unpaid until an
+authorized admin checks the GCash transaction and manually marks the order paid
+in the Orders section. A submitted reference is not proof of payment by itself.
 ## Google Sheets-compatible manual export
 
 The Reports page's **CSV for Google Sheets** button downloads the selected

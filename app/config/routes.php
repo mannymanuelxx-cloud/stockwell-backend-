@@ -115,6 +115,7 @@ $router->patch('/api/shop/notifications/read', 'ShopController::markNotification
 $router->get('/api/shop/orders/{id}', 'ShopController::order');
 $router->post('/api/shop/orders/{id}/cancel', 'ShopController::cancelOrder');
 $router->post('/api/shop/orders', 'ShopController::checkout');
+$router->post('/api/shop/orders/{id}/payment-reference', 'ShopController::submitPaymentReference');
 $router->get('/api/shop/profile', 'ShopController::profile');
 $router->put('/api/shop/profile', 'ShopController::updateProfile');
 $router->post('/api/shop/addresses', 'ShopController::addAddress');
