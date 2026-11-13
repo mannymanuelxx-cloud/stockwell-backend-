@@ -1,7 +1,8 @@
 # Optional storefront integrations
 
-These settings are optional. Google Sheets export works without external
-credentials. Turnstile and Google Analytics remain disabled until configured.
+These settings are optional. The CSV export works without external credentials.
+Google Sheets API, manual GCash transfer, Turnstile, and Google Analytics
+remain disabled until configured.
 
 ## Cloudflare Turnstile for customer registration
 
@@ -50,12 +51,35 @@ choice with **Privacy choices** in the footer.
 
 Customers can still choose Cash on delivery. For GCash, the customer places the
 order, transfers the exact displayed total, then submits the transaction
-reference under **My orders ? Details**. The order remains unpaid until an
+reference under **My orders → Details**. The order remains unpaid until an
 authorized admin checks the GCash transaction and manually marks the order paid
 in the Orders section. A submitted reference is not proof of payment by itself.
-## Google Sheets-compatible manual export
+Paid orders retain the existing stock reservation and fulfillment flow.
+
+## Google Sheets API manual sync
+
+1. In Google Cloud, enable the Google Sheets API and create a service account.
+2. Create or choose a spreadsheet, then share it with the service account's
+   `client_email` as an Editor.
+3. Add these variables to the Render `stockwell-api` environment:
+   - `GOOGLE_SHEETS_SPREADSHEET_ID`: the ID between `/d/` and `/edit` in the
+     spreadsheet URL
+   - `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON`: the full service-account JSON key
+4. Keep the JSON key private; never put it in the storefront, source control, or
+   chat. Redeploy the API after saving the environment variables.
+5. Sign in as an administrator, open **Reports**, select a date range, and
+   choose **Sync to Google Sheets**.
+
+The sync creates and replaces data only in the dedicated **Stockwell Sales**,
+**Stockwell Orders**, and **Stockwell Inventory** tabs. Sales and orders use
+the selected report date range; inventory is a current stock snapshot. The
+export includes IDs, dates, status, payment method/status, totals, and product
+stock fields, but does not include customer contact details or delivery
+addresses. Do not use the three dedicated tabs for unrelated data because each
+sync replaces their contents. Other spreadsheet tabs are left unchanged.
+
+## Google Sheets-compatible CSV export
 
 The Reports page's **CSV for Google Sheets** button downloads the selected
 report as a CSV file. In Google Sheets, use **File → Import → Upload** and
-select the downloaded file. This is a manual export only: Stockwell does not
-connect to a Google account or automatically sync customer or order data.
+select the downloaded file. This remains available as a separate manual export.

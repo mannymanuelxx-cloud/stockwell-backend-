@@ -1,6 +1,7 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 require_once __DIR__ . '/../libraries/BrowserSecurityPolicy.php';
+require_once __DIR__ . '/../libraries/GoogleSheetsIntegration.php';
 
 class BusinessController extends Controller
 {
@@ -189,6 +190,30 @@ class BusinessController extends Controller
             return;
         }
         $this->respond(200, ['data' => $this->BusinessModel->reportData($start, $end)]);
+    }
+
+    public function syncGoogleSheets()
+    {
+        if (!$this->requireAuthentication('backup.manage')) return;
+        $payload = $this->readPayload();
+        if ($payload === null) {
+            $this->respond(400, ['error' => 'Request body must be valid JSON.']);
+            return;
+        }
+        $start = $payload['start'] ?? null;
+        $end = $payload['end'] ?? null;
+        if (!is_string($start) || !is_string($end)
+            || !$this->validDate($start) || !$this->validDate($end) || $start > $end) {
+            $this->respond(422, ['error' => 'Choose a valid date range with the start date on or before the end date.']);
+            return;
+        }
+        try {
+            $counts = (new GoogleSheetsIntegration())->sync($this->BusinessModel->googleSheetsSyncData($start, $end));
+            $this->respond(200, ['data' => ['rows' => $counts]]);
+        } catch (Throwable $error) {
+            error_log('Google Sheets sync failed: ' . $error->getMessage());
+            $this->respond(502, ['error' => $error->getMessage()]);
+        }
     }
 
     private function listContacts($table)

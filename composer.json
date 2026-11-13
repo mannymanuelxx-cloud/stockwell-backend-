@@ -9,6 +9,7 @@
             "php tests/PasswordResetLinkPolicyTest.php",
             "php tests/GoogleOAuthProfilePolicyTest.php",
             "php tests/CloudflareTurnstilePolicyTest.php",
+            "php tests/GoogleSheetsIntegrationTest.php",
             "php tests/ManualGcashCheckoutTest.php",
             "php tests/StockAdjustmentPolicyTest.php",
             "php tests/StaffPermissionPolicyTest.php",

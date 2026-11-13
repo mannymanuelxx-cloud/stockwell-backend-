@@ -1870,6 +1870,63 @@ class BusinessModel extends Model
         ];
     }
 
+    public function googleSheetsSyncData($start, $end)
+    {
+        $sales = $this->db->raw(
+            'SELECT id, created_at, status, payment_status, payment_method, amount_paid, total
+             FROM sales WHERE DATE(created_at) BETWEEN ? AND ? ORDER BY created_at, id',
+            [$start, $end]
+        )->fetchAll();
+        $orders = $this->db->raw(
+            'SELECT id, created_at, status, payment_status, payment_method, amount_paid, total
+             FROM customer_orders WHERE DATE(created_at) BETWEEN ? AND ? ORDER BY created_at, id',
+            [$start, $end]
+        )->fetchAll();
+        $inventory = $this->db->raw(
+            'SELECT id, product_name, sku, category, price, quantity, reorder_level
+             FROM products ORDER BY product_name, id'
+        )->fetchAll();
+
+        $documentRows = function (array $documents) {
+            return array_map(function ($document) {
+                return [
+                    (int) $document['id'],
+                    (string) $document['created_at'],
+                    (string) $document['status'],
+                    (string) $document['payment_status'],
+                    (string) $document['payment_method'],
+                    (float) $document['amount_paid'],
+                    (float) $document['total']
+                ];
+            }, $documents);
+        };
+
+        return [
+            'Stockwell Sales' => [
+                'headers' => ['Sale ID', 'Date', 'Status', 'Payment status', 'Payment method', 'Amount paid', 'Total'],
+                'rows' => $documentRows($sales)
+            ],
+            'Stockwell Orders' => [
+                'headers' => ['Order ID', 'Date', 'Status', 'Payment status', 'Payment method', 'Amount paid', 'Total'],
+                'rows' => $documentRows($orders)
+            ],
+            'Stockwell Inventory' => [
+                'headers' => ['Product ID', 'Product', 'SKU', 'Category', 'Price', 'Quantity', 'Reorder level'],
+                'rows' => array_map(function ($product) {
+                    return [
+                        (int) $product['id'],
+                        (string) $product['product_name'],
+                        (string) ($product['sku'] ?? ''),
+                        (string) ($product['category'] ?? ''),
+                        (float) $product['price'],
+                        (int) $product['quantity'],
+                        (int) $product['reorder_level']
+                    ];
+                }, $inventory)
+            ]
+        ];
+    }
+
     private function profitSummary(array $summary)
     {
         $revenue = (float) ($summary['revenue'] ?? 0);
