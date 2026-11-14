@@ -24,7 +24,7 @@ $tests = [
         assertThrows(fn () => PaymentPolicy::normalize('paid', 'cheque', 100), 'valid payment method');
         assertThrows(fn () => PaymentPolicy::normalize('paid', 'cash', 0), 'greater than zero');
     },
-    'orders cannot be marked paid before delivery' => function () {
+    'verified GCash orders can be marked paid before delivery but COD cannot' => function () {
         assertThrows(
             fn () => PaymentPolicy::assertOrderPaymentTiming('paid', 'shipped'),
             'only be marked paid after it has been delivered'
@@ -33,6 +33,8 @@ $tests = [
         PaymentPolicy::assertOrderPaymentTiming('paid', 'delivered');
         PaymentPolicy::assertOrderPaymentTiming('paid', 'completed');
         PaymentPolicy::assertOrderPaymentTiming('paid', 'pending', true);
+        PaymentPolicy::assertOrderPaymentTiming('paid', 'processing', true);
+        PaymentPolicy::assertOrderPaymentTiming('paid', 'ready_to_ship', true);
         PaymentPolicy::assertOrderPaymentTiming('paid', 'shipped', true);
         assertThrows(
             fn () => PaymentPolicy::assertOrderPaymentTiming('paid', 'cancelled', true),

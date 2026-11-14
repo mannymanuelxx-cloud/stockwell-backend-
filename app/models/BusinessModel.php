@@ -1509,7 +1509,11 @@ class BusinessModel extends Model
                 ];
                 $paymentData = $this->paymentData($payment, $documentTotal, $kind === 'sales' ? 'paid' : 'unpaid');
                 if ($kind === 'orders') {
-                    PaymentPolicy::assertOrderPaymentTiming($paymentData['payment_status'], $document['status']);
+                    PaymentPolicy::assertOrderPaymentTiming(
+                        $paymentData['payment_status'],
+                        $document['status'],
+                        $this->hasVerifiedGcashReference($document, $paymentData)
+                    );
                 }
             }
 
@@ -1730,6 +1734,13 @@ class BusinessModel extends Model
         return PaymentPolicy::normalize($status, $method, $total);
     }
 
+    private function hasVerifiedGcashReference(array $order, array $paymentData)
+    {
+        return ($order['payment_method'] ?? null) === 'gcash'
+            && ($paymentData['payment_method'] ?? null) === 'gcash'
+            && trim((string) ($order['gcash_payment_reference'] ?? '')) !== '';
+    }
+
     public function updateOrderPayment($id, array $payment)
     {
         $this->db->transaction();
@@ -1741,13 +1752,10 @@ class BusinessModel extends Model
             )->fetch();
             if (!$order) throw new InvalidArgumentException('Record not found.');
             $paymentData = $this->paymentData($payment, (float) $order['total']);
-            $verifiedGcashReference = $order['payment_method'] === 'gcash'
-                && $paymentData['payment_method'] === 'gcash'
-                && !empty($order['gcash_payment_reference']);
             PaymentPolicy::assertOrderPaymentTiming(
                 $paymentData['payment_status'],
                 $order['status'],
-                $verifiedGcashReference
+                $this->hasVerifiedGcashReference($order, $paymentData)
             );
             $this->db->table('customer_orders')->where('id', $id)->update($paymentData);
             $this->db->commit();
