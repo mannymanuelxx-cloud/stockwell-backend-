@@ -196,25 +196,10 @@ class ProductModel extends Model
     {
         return $this->db->raw(
             'SELECT p.id, p.product_name, p.description, p.price, p.quantity, p.category, p.sku, p.barcode,
-                p.reorder_level, p.supplier_id, p.image_url,
+                p.image_url,
                 (SELECT COALESCE(AVG(r.rating), 0) FROM product_reviews r WHERE r.product_id = p.id) AS average_rating,
-                (SELECT COUNT(*) FROM product_reviews r WHERE r.product_id = p.id) AS review_count,
-                COALESCE(sales_summary.units_sold, 0) AS units_sold
+                (SELECT COUNT(*) FROM product_reviews r WHERE r.product_id = p.id) AS review_count
              FROM products p
-             LEFT JOIN (
-                SELECT sold_items.product_id, SUM(sold_items.quantity) AS units_sold
-                FROM (
-                    SELECT si.product_id, si.quantity
-                    FROM sale_items si
-                    JOIN sales s ON s.id = si.sale_id AND s.status = \'completed\'
-                    UNION ALL
-                    SELECT oi.product_id, oi.quantity
-                    FROM customer_order_items oi
-                    JOIN customer_orders o ON o.id = oi.order_id
-                    WHERE o.status IN (\'completed\', \'delivered\')
-                ) sold_items
-                GROUP BY sold_items.product_id
-             ) sales_summary ON sales_summary.product_id = p.id
              WHERE p.quantity > 0
              ORDER BY p.product_name'
         )->fetchAll();
