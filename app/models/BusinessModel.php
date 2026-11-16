@@ -1507,7 +1507,12 @@ class BusinessModel extends Model
                     'payment_method' => $document['payment_method'],
                     'amount_paid' => $document['amount_paid']
                 ];
-                $paymentData = $this->paymentData($payment, $documentTotal, $kind === 'sales' ? 'paid' : 'unpaid');
+                $paymentData = $this->paymentData(
+                    $payment,
+                    $documentTotal,
+                    $kind === 'sales' ? 'paid' : 'unpaid',
+                    $document['payment_method'] ?? null
+                );
                 if ($kind === 'orders') {
                     PaymentPolicy::assertOrderPaymentTiming(
                         $paymentData['payment_status'],
@@ -1727,11 +1732,11 @@ class BusinessModel extends Model
         ]);
     }
 
-    private function paymentData(array $payment, $total, $defaultStatus = 'unpaid')
+    private function paymentData(array $payment, $total, $defaultStatus = 'unpaid', $existingMethod = null)
     {
         $status = $payment['payment_status'] ?? $defaultStatus;
         $method = $payment['payment_method'] ?? 'cash';
-        return PaymentPolicy::normalize($status, $method, $total);
+        return PaymentPolicy::normalize($status, $method, $total, $existingMethod);
     }
 
     private function hasVerifiedGcashReference(array $order, array $paymentData)
@@ -1751,7 +1756,7 @@ class BusinessModel extends Model
                 [$id]
             )->fetch();
             if (!$order) throw new InvalidArgumentException('Record not found.');
-            $paymentData = $this->paymentData($payment, (float) $order['total']);
+            $paymentData = $this->paymentData($payment, (float) $order['total'], 'unpaid', $order['payment_method']);
             PaymentPolicy::assertOrderPaymentTiming(
                 $paymentData['payment_status'],
                 $order['status'],

@@ -20,8 +20,22 @@ $tests = [
     'partial payment status is rejected' => function () {
         assertThrows(fn () => PaymentPolicy::normalize('partial', 'cash', 100), 'paid in full or unpaid');
     },
-    'invalid payment methods and totals are rejected' => function () {
-        assertThrows(fn () => PaymentPolicy::normalize('paid', 'cheque', 100), 'valid payment method');
+    'only COD and GCash are accepted for new payments' => function () {
+        assertSame('cash', PaymentPolicy::normalize('paid', 'cash', 100)['payment_method']);
+        assertSame('gcash', PaymentPolicy::normalize('unpaid', 'gcash', 100)['payment_method']);
+        foreach (['card', 'bank_transfer', 'other', 'cheque'] as $method) {
+            assertThrows(fn () => PaymentPolicy::normalize('paid', $method, 100), 'valid payment method');
+        }
+        assertSame(
+            'card',
+            PaymentPolicy::normalize('paid', 'card', 100, 'card')['payment_method']
+        );
+        assertThrows(
+            fn () => PaymentPolicy::normalize('paid', 'card', 100, 'cash'),
+            'valid payment method'
+        );
+    },
+    'invalid payment totals are rejected' => function () {
         assertThrows(fn () => PaymentPolicy::normalize('paid', 'cash', 0), 'greater than zero');
     },
     'verified GCash orders can be marked paid before delivery but COD cannot' => function () {

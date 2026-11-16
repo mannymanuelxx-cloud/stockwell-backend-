@@ -3,14 +3,17 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 final class PaymentPolicy
 {
-    private const METHODS = ['cash', 'card', 'gcash', 'bank_transfer', 'other'];
+    private const METHODS = ['cash', 'gcash'];
+    private const LEGACY_METHODS = ['card', 'bank_transfer', 'other'];
 
-    public static function normalize($status, $method, $total)
+    public static function normalize($status, $method, $total, $existingMethod = null)
     {
         if (!in_array($status, ['unpaid', 'paid'], true)) {
             throw new InvalidArgumentException('Payment must be recorded as paid in full or unpaid.');
         }
-        if (!in_array($method, self::METHODS, true)) {
+        $isUnchangedLegacyMethod = $method === $existingMethod
+            && in_array($existingMethod, self::LEGACY_METHODS, true);
+        if (!in_array($method, self::METHODS, true) && !$isUnchangedLegacyMethod) {
             throw new InvalidArgumentException('Choose a valid payment method.');
         }
         if (!is_numeric($total) || (float) $total <= 0) {
