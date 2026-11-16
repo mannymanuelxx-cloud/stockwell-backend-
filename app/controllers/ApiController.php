@@ -16,7 +16,7 @@ class ApiController extends Controller
     public function index()
     {
         if (!$this->requireAuthentication(['inventory.manage', 'sales.manage', 'orders.manage', 'purchases.manage'])) return;
-        $this->respond(200, ['data' => $this->ProductModel->all()]);
+        $this->respond(200, ['data' => $this->ProductModel->inventoryCatalog()]);
     }
 
     public function stockAdjustments()
@@ -41,6 +41,7 @@ class ApiController extends Controller
             $this->respond(400, ['error' => 'A valid product ID is required.']);
             return;
         }
+
         $payload = $this->readPayload();
         if ($payload === null) {
             $this->respond(400, ['error' => 'Request body must be valid JSON.']);
@@ -65,6 +66,93 @@ class ApiController extends Controller
             $this->respond(201, ['data' => $record]);
         } catch (InvalidArgumentException $error) {
             $this->respond(422, ['error' => $error->getMessage()]);
+        }
+    }
+
+    public function addVariant($id = null)
+    {
+        if (!$this->requireAuthentication()) return;
+        $productId = $this->validId($id);
+        if ($productId === null) {
+            $this->respond(400, ['error' => 'A valid product ID is required.']);
+            return;
+        }
+        $payload = $this->readPayload();
+        if ($payload === null) {
+            $this->respond(400, ['error' => 'Request body must be valid JSON.']);
+            return;
+        }
+        try {
+            $variantId = $this->ProductModel->addVariant($productId, $payload);
+            $this->BusinessModel->logActivity(
+                (int) $_SESSION['user_id'],
+                $_SESSION['username'] ?? 'Staff',
+                'created',
+                'product variant',
+                $variantId,
+                $payload['variant_name'] ?? null
+            );
+            $this->respond(201, ['data' => $this->ProductModel->find($variantId)]);
+        } catch (InvalidArgumentException $error) {
+            $this->respond(422, ['error' => $error->getMessage()]);
+        }
+    }
+
+    public function destroyVariant($id = null, $variantId = null)
+    {
+        if (!$this->requireAuthentication()) return;
+        $productId = $this->validId($id);
+        $variantId = $this->validId($variantId);
+        if ($productId === null || $variantId === null) {
+            $this->respond(400, ['error' => 'Valid product and variant IDs are required.']);
+            return;
+        }
+        if ($this->BusinessModel->productHasHistory($variantId)) {
+            $this->respond(409, ['error' => 'This variant is linked to sales, orders, or purchases and cannot be deleted.']);
+            return;
+        }
+        try {
+            $this->ProductModel->deleteVariant($productId, $variantId);
+            $this->BusinessModel->logActivity(
+                (int) $_SESSION['user_id'],
+                $_SESSION['username'] ?? 'Staff',
+                'deleted',
+                'product variant',
+                $variantId
+            );
+            $this->respond(204);
+        } catch (InvalidArgumentException $error) {
+            $this->respond(404, ['error' => $error->getMessage()]);
+        }
+    }
+
+    public function updateVariant($id = null, $variantId = null)
+    {
+        if (!$this->requireAuthentication()) return;
+        $productId = $this->validId($id);
+        $variantId = $this->validId($variantId);
+        if ($productId === null || $variantId === null) {
+            $this->respond(400, ['error' => 'Valid product and variant IDs are required.']);
+            return;
+        }
+        $payload = $this->readPayload();
+        if ($payload === null) {
+            $this->respond(400, ['error' => 'Request body must be valid JSON.']);
+            return;
+        }
+        try {
+            $this->ProductModel->updateVariant($productId, $variantId, $payload);
+            $this->BusinessModel->logActivity(
+                (int) $_SESSION['user_id'],
+                $_SESSION['username'] ?? 'Staff',
+                'updated',
+                'product variant',
+                $variantId,
+                $payload['variant_name'] ?? null
+            );
+            $this->respond(200, ['data' => $this->ProductModel->find($variantId)]);
+        } catch (InvalidArgumentException $error) {
+            $this->respond($error->getMessage() === 'Variant not found.' ? 404 : 422, ['error' => $error->getMessage()]);
         }
     }
 
@@ -118,6 +206,10 @@ class ApiController extends Controller
         $product = $this->ProductModel->find($productId);
         if (!$product) {
             $this->respond(404, ['error' => 'Product not found.']);
+            return;
+        }
+        if (!empty($product['parent_product_id'])) {
+            $this->respond(409, ['error' => 'Edit the parent product to change the shared product image.']);
             return;
         }
         if (!isset($_FILES['image']) || !is_array($_FILES['image'])) {
@@ -210,6 +302,10 @@ class ApiController extends Controller
             $this->respond(404, ['error' => 'Product not found.']);
             return;
         }
+        if (!empty($existingProduct['parent_product_id'])) {
+            $this->respond(409, ['error' => 'Edit this option from the parent product options list.']);
+            return;
+        }
 
         $payload = $this->readPayload();
         if ($payload === null) {
@@ -229,6 +325,9 @@ class ApiController extends Controller
         unset($product['quantity']);
 
         $this->ProductModel->update($product_id, $product);
+        if (empty($existingProduct['parent_product_id'])) {
+            $this->ProductModel->syncVariantDetails($product_id, $product);
+        }
         $updatedProduct = $this->ProductModel->find($product_id);
         $this->BusinessModel->logActivity((int) $_SESSION['user_id'], $_SESSION['username'] ?? 'Staff', 'updated', 'product', $product_id, $updatedProduct['product_name'] ?? null);
         $this->respond(200, ['data' => $updatedProduct]);
@@ -249,6 +348,14 @@ class ApiController extends Controller
             return;
         }
 
+        if (!empty($product['parent_product_id'])) {
+            $this->respond(409, ['error' => 'Variant records must be removed from their parent product after their stock reaches zero.']);
+            return;
+        }
+        if ($this->ProductModel->hasVariants($product_id)) {
+            $this->respond(409, ['error' => 'Remove this product’s variants before deleting the base product.']);
+            return;
+        }
         if ($this->BusinessModel->productHasHistory($product_id)) {
             $this->respond(409, ['error' => 'This product is linked to sales, orders, or purchases and cannot be deleted.']);
             return;

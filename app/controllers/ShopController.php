@@ -21,7 +21,7 @@ class ShopController extends Controller
     public function productReviews($id = null)
     {
         $productId = filter_var($id, FILTER_VALIDATE_INT);
-        if ($productId === false || $productId < 1 || !$this->ProductModel->find($productId)) {
+        if ($productId === false || $productId < 1) {
             $this->respond(404, ['error' => 'Product not found.']);
             return;
         }
@@ -36,14 +36,19 @@ class ShopController extends Controller
                 $customerId = $this->BusinessModel->customerIdForUser((int) $_SESSION['user_id']);
             }
         }
-        $this->respond(200, ['data' => $this->BusinessModel->productReviews($productId, $customerId)]);
+        $reviews = $this->BusinessModel->productReviews($productId, $customerId);
+        if (!$this->ProductModel->find($productId) && !$reviews['can_review'] && !$reviews['own_review']) {
+            $this->respond(404, ['error' => 'Product not found.']);
+            return;
+        }
+        $this->respond(200, ['data' => $reviews]);
     }
 
     public function createProductReview($id = null)
     {
         if (!$this->requireCustomer()) return;
         $productId = filter_var($id, FILTER_VALIDATE_INT);
-        if ($productId === false || $productId < 1 || !$this->ProductModel->find($productId)) {
+        if ($productId === false || $productId < 1) {
             $this->respond(404, ['error' => 'Product not found.']);
             return;
         }

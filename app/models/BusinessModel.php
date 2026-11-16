@@ -535,7 +535,14 @@ class BusinessModel extends Model
 
     public function productOptions()
     {
-        return $this->db->raw('SELECT id, product_name, price, quantity FROM products ORDER BY product_name')->fetchAll();
+        return $this->db->raw(
+            "SELECT id, product_name, variant_name, parent_product_id, price, quantity,
+                CASE WHEN variant_name IS NOT NULL THEN CONCAT(product_name, ' · ', variant_name)
+                     WHEN EXISTS (SELECT 1 FROM products child WHERE child.parent_product_id = products.id)
+                     THEN CONCAT(product_name, ' · Standard')
+                     ELSE product_name END AS display_name
+             FROM products ORDER BY product_name, variant_name"
+        )->fetchAll();
     }
 
     public function customerIdForUser($userId)
@@ -1247,7 +1254,7 @@ class BusinessModel extends Model
             $total = 0;
             foreach ($normalized as &$item) {
                 $product = $this->db->raw(
-                    'SELECT id, product_name, price, quantity FROM products WHERE id = ? FOR UPDATE',
+                    'SELECT id, product_name, variant_name, price, quantity FROM products WHERE id = ? FOR UPDATE',
                     [$item['product_id']]
                 )->fetch();
                 if (!$product) {
@@ -1256,7 +1263,8 @@ class BusinessModel extends Model
                 if ((int) $product['quantity'] < $item['quantity']) {
                     throw new InvalidArgumentException('Not enough stock for ' . $product['product_name'] . '.');
                 }
-                $item['product_name'] = $product['product_name'];
+                $item['product_name'] = $product['product_name']
+                    . (!empty($product['variant_name']) ? ' · ' . $product['variant_name'] : '');
                 $item['unit_price'] = (float) $product['price'];
                 $item['line_total'] = round($item['unit_price'] * $item['quantity'], 2);
                 if ($item['line_total'] > 9999999999.99 || $total + $item['line_total'] > 9999999999.99) {
@@ -1383,12 +1391,13 @@ class BusinessModel extends Model
             });
             $total = 0;
             foreach ($normalized as &$item) {
-                $product = $this->db->raw('SELECT id, product_name, price, quantity FROM products WHERE id = ? FOR UPDATE', [$item['product_id']])->fetch();
+                $product = $this->db->raw('SELECT id, product_name, variant_name, price, quantity FROM products WHERE id = ? FOR UPDATE', [$item['product_id']])->fetch();
                 if (!$product) throw new InvalidArgumentException('One of the selected products no longer exists.');
                 if ($kind === 'sales' && (int) $product['quantity'] < $item['quantity']) {
                     throw new InvalidArgumentException('Not enough stock for ' . $product['product_name'] . '.');
                 }
-                $item['product_name'] = $product['product_name'];
+                $item['product_name'] = $product['product_name']
+                    . (!empty($product['variant_name']) ? ' · ' . $product['variant_name'] : '');
                 $item['unit_price'] = $kind === 'purchases' ? $item['unit_cost'] : (float) $product['price'];
                 $item['line_total'] = round($item['unit_price'] * $item['quantity'], 2);
                 if ($item['line_total'] > 9999999999.99 || $total + $item['line_total'] > 9999999999.99) {
@@ -1475,7 +1484,7 @@ class BusinessModel extends Model
             $lockedProducts = [];
             foreach ($productIds as $productId) {
                 $product = $this->db->raw(
-                    'SELECT id, product_name, price, quantity FROM products WHERE id = ? FOR UPDATE',
+                    'SELECT id, product_name, variant_name, price, quantity FROM products WHERE id = ? FOR UPDATE',
                     [$productId]
                 )->fetch();
                 if (!$product) throw new InvalidArgumentException('A product in this record no longer exists.');
@@ -1485,7 +1494,8 @@ class BusinessModel extends Model
             $total = 0;
             foreach ($normalized as &$item) {
                 $product = $lockedProducts[$item['product_id']];
-                $item['product_name'] = $product['product_name'];
+                $item['product_name'] = $product['product_name']
+                    . (!empty($product['variant_name']) ? ' · ' . $product['variant_name'] : '');
                 $item['unit_price'] = $kind === 'purchases'
                     ? $item['unit_cost']
                     : ($oldUnitPrices[$item['product_id']] ?? (float) $product['price']);
